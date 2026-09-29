@@ -1,0 +1,10 @@
+{
+  "name": "Andorstrail 3DS",
+  "image": "devkitpro/devkitarm:latest",
+  "remoteUser": "root",
+  "containerEnv": {
+    "DEVKITPRO": "/opt/devkitpro",
+    "DEVKITARM": "/opt/devkitpro/devkitARM"
+  },
+  "postCreateCommand": "dkp-pacman -Syu --noconfirm 3ds-dev"
+}
