@@ -101,17 +101,17 @@ static void test_original_records(GameResources *resources)
     game_json_dispose(&document);
 
     GameJsonRef filter = open_record(
-        resources, GAME_RESOURCE_ITEM_FILTER, "debug_any", &document
+        resources, GAME_RESOURCE_ITEM_FILTER, "gael_meat", &document
     );
-    assert(game_json_array_size(game_json_object_get(filter, "includeTags")) > 0);
+    assert(game_json_array_size(game_json_object_get(filter, "include")) > 0);
     game_json_dispose(&document);
 }
 
 int main(int argc, char **argv)
 {
     assert(argc == 2);
-    assert(game_resource_document_count == 449);
-    assert(game_resource_record_count == 19613);
+    assert(game_resource_document_count == 442);
+    assert(game_resource_record_count == 19605);
 
     GameResources resources;
     assert(game_resources_init(&resources, argv[1]));
