@@ -6,5 +6,16 @@
     "DEVKITPRO": "/opt/devkitpro",
     "DEVKITARM": "/opt/devkitpro/devkitARM"
   },
+  "customizations": {
+    "codespaces": {
+      "repositories": {
+        "Andor3ds/Andorstrail": {
+          "permissions": {
+            "contents": "read"
+          }
+        }
+      }
+    }
+  },
   "postCreateCommand": "dkp-pacman -Syu --noconfirm 3ds-dev"
 }
