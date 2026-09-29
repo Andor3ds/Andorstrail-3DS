@@ -4,3 +4,5 @@
 /andorstrail-3ds.smdh
 /andorstrail-3ds.lst
 /andorstrail-3ds.map
+__pycache__/
+*.py[cod]
