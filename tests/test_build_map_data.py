@@ -56,6 +56,11 @@ class MapDataBuilderTests(unittest.TestCase):
                 png_width, png_height = struct.unpack(">II", png_header[16:24])
                 self.assertGreaterEqual(png_width, tileset[3])
                 self.assertGreaterEqual(png_height, tileset[4])
+            else:
+                png_header = image.read_bytes()[:26]
+                self.assertEqual(struct.unpack(">II", png_header[16:24]), (32, 32))
+                self.assertEqual(png_header[24], 8)
+                self.assertEqual(png_header[25], 6)
         self.assertGreater(len(used), 0)
 
     def test_bundles_only_original_images_used_by_default_home_layers(self):

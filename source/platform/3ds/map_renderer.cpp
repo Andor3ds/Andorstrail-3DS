@@ -135,6 +135,15 @@ bool MapRenderer::load_tileset_sheets(
             return false;
         }
 
+        const C2D_Image whole = C2D_SpriteSheetGetImage(sheet, 0);
+        if (whole.tex == NULL || whole.subtex == NULL) {
+            C2D_SpriteSheetFree(sheet);
+            std::fclose(list);
+            error = "original texture sheet contains no image: " + texture_path;
+            return false;
+        }
+        C3D_TexSetFilter(whole.tex, GPU_NEAREST, GPU_NEAREST);
+
         const std::size_t index = sheets_.size();
         sheets_.push_back(sheet);
         image_names_.push_back(image_name);
@@ -261,18 +270,18 @@ void MapRenderer::draw(int screen_width, int screen_height) const
     const map::ViewTransform view = map::camera_for_player(
         document_, player_, screen_width, screen_height
     );
-    draw_layer("base", view, 0.50f);
-    draw_layer("ground", view, 0.45f);
-    draw_layer("objects", view, 0.40f);
+    draw_layer("base", view, 0.5f);
+    draw_layer("ground", view, 0.5f);
+    draw_layer("objects", view, 0.5f);
 
     map::GridPosition player_screen;
     if (map::map_to_screen(view, player_, player_screen)) {
         C2D_DrawImageAt(player_image_, static_cast<float>(player_screen.x),
-            static_cast<float>(player_screen.y), 0.35f, NULL);
+            static_cast<float>(player_screen.y), 0.5f, NULL);
     }
 
-    draw_layer("above", view, 0.30f);
-    draw_layer("top", view, 0.25f);
+    draw_layer("above", view, 0.5f);
+    draw_layer("top", view, 0.5f);
 }
 
 bool MapRenderer::move_player(int dx, int dy)
@@ -283,6 +292,21 @@ bool MapRenderer::move_player(int dx, int dy)
 map::GridPosition MapRenderer::player_position() const
 {
     return player_;
+}
+
+map::ViewTransform MapRenderer::camera(int screen_width, int screen_height) const
+{
+    return map::camera_for_player(document_, player_, screen_width, screen_height);
+}
+
+bool MapRenderer::player_walkable() const
+{
+    return map::is_walkable(document_, player_.x, player_.y);
+}
+
+const char *MapRenderer::map_id() const
+{
+    return document_.name.c_str();
 }
 
 }

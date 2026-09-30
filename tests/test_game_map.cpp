@@ -32,6 +32,15 @@ int main(int argc, char **argv)
     assert(home.tilesets[0].tile_count == 128 && home.tilesets[0].columns == 16);
     assert(!home.layers.empty());
     assert(!home.object_groups.empty());
+    TranslatedDocument translated_home;
+    assert(translate_document(home, translated_home, &error));
+    bool found_android_start = false;
+    for (const auto &event : translated_home.events) {
+        if (event.kind == EventKind::Rest && event.name == "rest") {
+            found_android_start = event.tile_rect.x == 1 && event.tile_rect.y == 4;
+        }
+    }
+    assert(found_android_start);
     const Layer *home_walkable = andortrail::map::find_layer(home, "walkable");
     assert(home_walkable != NULL);
     assert(home_walkable->gids.size() == 12u * 10u);
@@ -57,6 +66,12 @@ int main(int argc, char **argv)
     assert(player.x == original_player.x && player.y == original_player.y);
     assert(andortrail::map::move_player(home, player, 1, 0));
     assert(player.x == 2 && player.y == 4);
+    for (int step = 0; step < 6; ++step) {
+        assert(andortrail::map::move_player(home, player, 1, 0));
+    }
+    assert(player.x == 8 && player.y == 4);
+    assert(!andortrail::map::move_player(home, player, 0, -1));
+    assert(player.x == 8 && player.y == 4);
     assert(!andortrail::map::is_walkable(home, -1, 4));
 
     const ViewTransform view = andortrail::map::camera_for_player(home, original_player, 400, 240);

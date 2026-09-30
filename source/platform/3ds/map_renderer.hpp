@@ -23,6 +23,9 @@ public:
     void draw(int screen_width, int screen_height) const;
     bool move_player(int dx, int dy);
     map::GridPosition player_position() const;
+    map::ViewTransform camera(int screen_width, int screen_height) const;
+    bool player_walkable() const;
+    const char *map_id() const;
 
 private:
     bool load_tileset_sheets(const char *tileset_list_path,
