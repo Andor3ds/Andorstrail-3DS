@@ -24,9 +24,36 @@ struct Rect {
 
 struct Tileset {
     std::string name;
+    std::string image_source;
     std::uint32_t first_gid;
+    std::uint32_t tile_count;
+    int columns;
     int declared_tile_width;
     int declared_tile_height;
+    int image_width;
+    int image_height;
+};
+
+struct TileSource {
+    std::size_t tileset_index;
+    std::uint32_t local_id;
+    int pixel_x;
+    int pixel_y;
+};
+
+struct GridPosition {
+    int x;
+    int y;
+};
+
+struct ViewTransform {
+    int camera_x;
+    int camera_y;
+    int visible_columns;
+    int visible_rows;
+    int screen_offset_x;
+    int screen_offset_y;
+    int tile_size;
 };
 
 struct Layer {
@@ -226,6 +253,16 @@ bool load_catalog(
 
 const Property *find_property(const std::vector<Property> &properties, const std::string &name);
 const Layer *find_layer(const Document &document, const std::string &name);
+bool resolve_tile_source(const Document &document, std::uint32_t gid, TileSource &source);
+bool is_walkable(const Document &document, int x, int y);
+bool move_player(const Document &document, GridPosition &position, int dx, int dy);
+ViewTransform camera_for_player(
+    const Document &document,
+    GridPosition player,
+    int screen_width,
+    int screen_height
+);
+bool map_to_screen(const ViewTransform &view, GridPosition map_position, GridPosition &screen_position);
 
 }
 }

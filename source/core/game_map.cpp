@@ -454,6 +454,84 @@ const Layer *find_layer(const Document &document, const std::string &name)
     return NULL;
 }
 
+bool resolve_tile_source(const Document &document, std::uint32_t gid, TileSource &source)
+{
+    if (gid == 0) return false;
+    for (std::size_t index = document.tilesets.size(); index > 0; --index) {
+        const Tileset &tileset = document.tilesets[index - 1];
+        if (gid < tileset.first_gid) continue;
+        const std::uint32_t local_id = gid - tileset.first_gid;
+        if (tileset.columns <= 0 || tileset.tile_count == 0 || local_id >= tileset.tile_count
+                || tileset.declared_tile_width <= 0 || tileset.declared_tile_height <= 0) {
+            return false;
+        }
+        source.tileset_index = index - 1;
+        source.local_id = local_id;
+        source.pixel_x = static_cast<int>(local_id % static_cast<std::uint32_t>(tileset.columns))
+            * tileset.declared_tile_width;
+        source.pixel_y = static_cast<int>(local_id / static_cast<std::uint32_t>(tileset.columns))
+            * tileset.declared_tile_height;
+        return true;
+    }
+    return false;
+}
+
+bool is_walkable(const Document &document, int x, int y)
+{
+    if (x < 0 || y < 0 || x >= document.width || y >= document.height) return false;
+    const Layer *walkable = find_layer(document, "walkable");
+    if (walkable == NULL) return false;
+    return walkable->gid_at(x, y, document.height) == 0;
+}
+
+bool move_player(const Document &document, GridPosition &position, int dx, int dy)
+{
+    if (std::abs(dx) + std::abs(dy) != 1) return false;
+    const GridPosition next = {position.x + dx, position.y + dy};
+    if (!is_walkable(document, next.x, next.y)) return false;
+    position = next;
+    return true;
+}
+
+ViewTransform camera_for_player(
+    const Document &document,
+    GridPosition player,
+    int screen_width,
+    int screen_height
+)
+{
+    const int tile_size = document.tile_width > 0 ? document.tile_width : android_tile_size;
+    const int screen_columns = screen_width > 0 ? screen_width / tile_size : 0;
+    const int screen_rows = screen_height > 0 ? screen_height / tile_size : 0;
+    ViewTransform view = {};
+    view.tile_size = tile_size;
+    view.visible_columns = std::min(document.width, screen_columns);
+    view.visible_rows = std::min(document.height, screen_rows);
+    if (view.visible_columns <= 0 || view.visible_rows <= 0) return view;
+
+    view.camera_x = std::max(0, player.x - view.visible_columns / 2);
+    view.camera_y = std::max(0, player.y - view.visible_rows / 2);
+    view.camera_x = std::min(view.camera_x, document.width - view.visible_columns);
+    view.camera_y = std::min(view.camera_y, document.height - view.visible_rows);
+    view.screen_offset_x = (screen_width - view.visible_columns * tile_size) / 2;
+    view.screen_offset_y = (screen_height - view.visible_rows * tile_size) / 2;
+    return view;
+}
+
+bool map_to_screen(
+    const ViewTransform &view,
+    GridPosition map_position,
+    GridPosition &screen_position
+)
+{
+    if (map_position.x < view.camera_x || map_position.y < view.camera_y
+            || map_position.x >= view.camera_x + view.visible_columns
+            || map_position.y >= view.camera_y + view.visible_rows) return false;
+    screen_position.x = view.screen_offset_x + (map_position.x - view.camera_x) * view.tile_size;
+    screen_position.y = view.screen_offset_y + (map_position.y - view.camera_y) * view.tile_size;
+    return true;
+}
+
 bool load_tmx(
     const std::string &path,
     const std::string &resource_name,
@@ -497,9 +575,19 @@ bool load_tmx(
         } else if (include_layers && std::strcmp(element_name, "tileset") == 0) {
             Tileset tileset;
             tileset.name = attribute_string(element, "name");
+            tileset.image_source.clear();
             tileset.first_gid = static_cast<std::uint32_t>(attribute_integer(element, "firstgid", 1));
+            tileset.tile_count = static_cast<std::uint32_t>(attribute_integer(element, "tilecount", 0));
+            tileset.columns = attribute_integer(element, "columns", 0);
             tileset.declared_tile_width = attribute_integer(element, "tilewidth", android_tile_size);
             tileset.declared_tile_height = attribute_integer(element, "tileheight", android_tile_size);
+            tileset.image_width = 0;
+            tileset.image_height = 0;
+            if (const tinyxml2::XMLElement *image = element->FirstChildElement("image")) {
+                tileset.image_source = attribute_string(image, "source");
+                tileset.image_width = attribute_integer(image, "width", 0);
+                tileset.image_height = attribute_integer(image, "height", 0);
+            }
             parsed.tilesets.push_back(tileset);
         } else if (include_layers && std::strcmp(element_name, "layer") == 0) {
             Layer layer;

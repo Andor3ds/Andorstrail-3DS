@@ -6,3 +6,4 @@
 /andorstrail-3ds.map
 __pycache__/
 *.py[cod]
+/romfs/gfx/*.t3x

@@ -8,8 +8,10 @@ using andortrail::map::Document;
 using andortrail::map::Layer;
 using andortrail::map::Catalog;
 using andortrail::map::EventKind;
+using andortrail::map::GridPosition;
 using andortrail::map::ScriptWhen;
 using andortrail::map::TranslatedDocument;
+using andortrail::map::ViewTransform;
 using andortrail::map::load_tmx;
 using andortrail::map::load_catalog;
 using andortrail::map::translate_document;
@@ -26,11 +28,46 @@ int main(int argc, char **argv)
     assert(home.width == 12 && home.height == 10);
     assert(home.tile_width == 32 && home.tile_height == 32);
     assert(!home.tilesets.empty());
+    assert(home.tilesets[0].image_source == "../drawable/map_bed_1.png");
+    assert(home.tilesets[0].tile_count == 128 && home.tilesets[0].columns == 16);
     assert(!home.layers.empty());
     assert(!home.object_groups.empty());
     const Layer *home_walkable = andortrail::map::find_layer(home, "walkable");
     assert(home_walkable != NULL);
     assert(home_walkable->gids.size() == 12u * 10u);
+    const Layer *home_ground = andortrail::map::find_layer(home, "ground");
+    assert(home_ground != NULL);
+    std::uint32_t ground_gid = 0;
+    for (std::uint32_t gid : home_ground->gids) {
+        if (gid != 0) {
+            ground_gid = gid;
+            break;
+        }
+    }
+    andortrail::map::TileSource ground_tile;
+    assert(ground_gid != 0 && andortrail::map::resolve_tile_source(home, ground_gid, ground_tile));
+    assert(ground_tile.pixel_x >= 0 && ground_tile.pixel_y >= 0);
+    assert(ground_tile.pixel_x % 32 == 0 && ground_tile.pixel_y % 32 == 0);
+
+    GridPosition player = {1, 4};
+    assert(andortrail::map::is_walkable(home, player.x, player.y));
+    const GridPosition original_player = player;
+    assert(!andortrail::map::is_walkable(home, 0, 4));
+    assert(!andortrail::map::move_player(home, player, -1, 0));
+    assert(player.x == original_player.x && player.y == original_player.y);
+    assert(andortrail::map::move_player(home, player, 1, 0));
+    assert(player.x == 2 && player.y == 4);
+    assert(!andortrail::map::is_walkable(home, -1, 4));
+
+    const ViewTransform view = andortrail::map::camera_for_player(home, original_player, 400, 240);
+    assert(view.visible_columns == 12 && view.visible_rows == 7);
+    assert(view.camera_x == 0 && view.camera_y == 1);
+    assert(view.screen_offset_x == 8 && view.screen_offset_y == 8);
+    GridPosition player_screen = {-1, -1};
+    assert(andortrail::map::map_to_screen(view, original_player, player_screen));
+    assert(player_screen.x == 40 && player_screen.y == 104);
+    GridPosition outside_screen = {-1, -1};
+    assert(!andortrail::map::map_to_screen(view, {1, 9}, outside_screen));
 
     Document crossglen;
     assert(load_tmx(directory + "/crossglen.tmx", "crossglen", false, crossglen, &error));
