@@ -39,6 +39,10 @@ typedef struct {
     uint32_t node;
 } GameJsonRef;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 bool game_json_parse(const char *source, size_t source_size, GameJsonDocument *document);
 bool game_json_parse_owned(char *source, size_t source_size, GameJsonDocument *document);
 void game_json_dispose(GameJsonDocument *document);
@@ -52,5 +56,9 @@ bool game_json_integer(GameJsonRef value, int64_t *result);
 bool game_json_number(GameJsonRef value, double *result);
 bool game_json_boolean(GameJsonRef value, bool *result);
 bool game_json_is_null(GameJsonRef value);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

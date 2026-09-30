@@ -38,6 +38,10 @@ typedef struct {
     FILE *pack;
 } GameResources;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 extern const GameResourceDocumentEntry game_resource_documents[];
 extern const size_t game_resource_document_count;
 extern const GameResourceRecordEntry game_resource_records[];
@@ -61,5 +65,9 @@ bool game_resources_open_record(
     GameJsonDocument *document,
     GameJsonRef *value
 );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

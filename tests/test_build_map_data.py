@@ -6,42 +6,56 @@ import xml.etree.ElementTree as ET
 import zlib
 from pathlib import Path
 
-from tools.build_map_data import copy_home_render_assets, copy_map_data
+from tools.build_map_data import copy_map_render_assets, copy_map_data
 
 
 class MapDataBuilderTests(unittest.TestCase):
-    def test_bundled_home_images_cover_default_layer_gids(self):
+    def test_bundled_transition_map_images_cover_default_layer_gids(self):
         project = Path(__file__).resolve().parents[1]
-        map_root = ET.parse(project / "romfs" / "maps" / "home.tmx").getroot()
-        tilesets = []
-        for element in map_root.findall("tileset"):
-            image = element.find("image")
-            if image is not None:
-                tilesets.append((
-                    int(element.get("firstgid", "1")),
-                    int(element.get("tilecount", "0")),
-                    image.get("source"),
-                    int(image.get("width", "0")),
-                    int(image.get("height", "0")),
-                ))
-
-        used = set()
-        for layer in map_root.findall("layer"):
-            if layer.get("name", "").lower() not in {"base", "ground", "objects", "above", "top"}:
-                continue
-            data = layer.find("data")
-            compressed = base64.b64decode("".join((data.text or "").split()))
-            raw = zlib.decompress(compressed)
-            gids = struct.unpack(f"<{len(raw) // 4}I", raw)
-            used.update(gid & 0x0FFFFFFF for gid in gids if gid != 0)
-
         required_images = []
-        for gid in sorted(used):
-            tileset = next(entry for entry in reversed(tilesets) if entry[0] <= gid)
-            self.assertLess(gid - tileset[0], tileset[1])
-            image_name = Path(tileset[2]).name
-            if image_name not in required_images:
-                required_images.append(image_name)
+        tilesets_by_image = {}
+        used_cell_count = 0
+        for map_id in ("home", "crossglen", "wild1"):
+            map_root = ET.parse(project / "romfs" / "maps" / f"{map_id}.tmx").getroot()
+            tilesets = []
+            for element in map_root.findall("tileset"):
+                image = element.find("image")
+                if image is not None:
+                    tile_width = int(element.get("tilewidth", "32"))
+                    tile_height = int(element.get("tileheight", "32"))
+                    image_width = int(image.get("width", "0"))
+                    image_height = int(image.get("height", "0"))
+                    columns = int(element.get("columns", "0")) or image_width // tile_width
+                    tile_count = int(element.get("tilecount", "0")) or (
+                        columns * (image_height // tile_height)
+                    )
+                    tileset = (
+                        int(element.get("firstgid", "1")),
+                        tile_count,
+                        image.get("source"),
+                        int(image.get("width", "0")),
+                        int(image.get("height", "0")),
+                    )
+                    tilesets.append(tileset)
+                    tilesets_by_image.setdefault(Path(tileset[2]).name, tileset)
+
+            used = set()
+            for layer in map_root.findall("layer"):
+                if layer.get("name", "").lower() not in {"base", "ground", "objects", "above", "top"}:
+                    continue
+                data = layer.find("data")
+                compressed = base64.b64decode("".join((data.text or "").split()))
+                raw = zlib.decompress(compressed)
+                gids = struct.unpack(f"<{len(raw) // 4}I", raw)
+                used.update(gid & 0x0FFFFFFF for gid in gids if gid != 0)
+                used_cell_count += sum(gid != 0 for gid in gids)
+
+            for gid in sorted(used):
+                tileset = next(entry for entry in reversed(tilesets) if entry[0] <= gid)
+                self.assertLess(gid - tileset[0], tileset[1])
+                image_name = Path(tileset[2]).name
+                if image_name not in required_images:
+                    required_images.append(image_name)
         expected_list = required_images + ["char_hero.png"]
 
         gfx_list = (project / "romfs" / "gfx" / "tilesets.list").read_text(encoding="ascii").splitlines()
@@ -50,7 +64,7 @@ class MapDataBuilderTests(unittest.TestCase):
             image = project / "assets" / "map" / "home" / image_name
             self.assertTrue(image.is_file(), image_name)
             if image_name != "char_hero.png":
-                tileset = next(entry for entry in tilesets if Path(entry[2]).name == image_name)
+                tileset = tilesets_by_image[image_name]
                 png_header = image.read_bytes()[:24]
                 self.assertEqual(png_header[:8], b"\x89PNG\r\n\x1a\n")
                 png_width, png_height = struct.unpack(">II", png_header[16:24])
@@ -61,7 +75,7 @@ class MapDataBuilderTests(unittest.TestCase):
                 self.assertEqual(struct.unpack(">II", png_header[16:24]), (32, 32))
                 self.assertEqual(png_header[24], 8)
                 self.assertEqual(png_header[25], 6)
-        self.assertGreater(len(used), 0)
+        self.assertGreater(used_cell_count, 0)
 
     def test_bundles_only_original_images_used_by_default_home_layers(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -87,7 +101,7 @@ class MapDataBuilderTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            count, byte_count = copy_home_render_assets(source, root / "project")
+            count, byte_count = copy_map_render_assets(source, root / "project", ("home",))
 
             asset_directory = root / "project" / "assets" / "map" / "home"
             self.assertEqual(count, 2)
@@ -97,6 +111,28 @@ class MapDataBuilderTests(unittest.TestCase):
             self.assertFalse((asset_directory / "replacement.png").exists())
             gfx_list = (root / "project" / "romfs" / "gfx" / "tilesets.list").read_text(encoding="ascii")
             self.assertEqual(gfx_list, "ground.png\nchar_hero.png\n")
+
+    def test_infers_old_tmx_tileset_grid_from_image_dimensions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "android"
+            xml = source / "res" / "xml"
+            drawable = source / "res" / "drawable"
+            xml.mkdir(parents=True)
+            drawable.mkdir(parents=True)
+            (drawable / "old_tiles.png").write_bytes(b"old tiles")
+            (drawable / "char_hero.png").write_bytes(b"hero")
+            layer = base64.b64encode(zlib.compress(struct.pack("<I", 100))).decode("ascii")
+            (xml / "wild1.tmx").write_text(
+                """<map width="1" height="1"><tileset firstgid="1" name="old" tilewidth="32" tileheight="32"><image source="../drawable/old_tiles.png" width="576" height="192"/></tileset>
+<layer name="Ground"><data encoding="base64" compression="zlib">""" + layer + """</data></layer></map>""",
+                encoding="utf-8",
+            )
+
+            count, _ = copy_map_render_assets(source, root / "project", ("wild1",))
+
+            self.assertEqual(count, 2)
+            self.assertTrue((root / "project/assets/map/home/old_tiles.png").is_file())
 
     def test_copies_only_configured_maps_and_worldmap(self):
         with tempfile.TemporaryDirectory() as directory:

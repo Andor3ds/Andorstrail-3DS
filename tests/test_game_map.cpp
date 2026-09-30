@@ -127,9 +127,22 @@ int main(int argc, char **argv)
     }
     assert(found_map_change && found_key && found_script);
 
+    andortrail::map::MapTransition home_to_crossglen;
+    assert(andortrail::map::resolve_map_transition(
+        translated_home, translated_crossglen, "entrance", {5, 9}, home_to_crossglen
+    ));
+    assert(home_to_crossglen.target_map == "crossglen");
+    assert(home_to_crossglen.target_place == "home");
+    assert(home_to_crossglen.destination.x == 5 && home_to_crossglen.destination.y == 5);
+
     Document wild1;
     assert(load_tmx(directory + "/wild1.tmx", "wild1", false, wild1, &error));
     assert(wild1.width == 21 && wild1.height == 21);
+    Document wild1_layers;
+    assert(load_tmx(directory + "/wild1.tmx", "wild1", true, wild1_layers, &error));
+    assert(!wild1_layers.tilesets.empty());
+    assert(wild1_layers.tilesets[0].columns == 16);
+    assert(wild1_layers.tilesets[0].tile_count == 128);
     bool found_sign = false;
     for (const auto &group : wild1.object_groups) {
         for (const auto &object : group.objects) {

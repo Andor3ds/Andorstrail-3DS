@@ -493,6 +493,39 @@ bool move_player(const Document &document, GridPosition &position, int dx, int d
     return true;
 }
 
+bool resolve_map_transition(
+    const TranslatedDocument &source,
+    const TranslatedDocument &destination,
+    const std::string &event_name,
+    GridPosition entered_position,
+    MapTransition &transition
+)
+{
+    for (const Event &event : source.events) {
+        if (event.kind != EventKind::MapChange || !event.active || event.name != event_name) continue;
+        if (entered_position.x < event.tile_rect.x || entered_position.y < event.tile_rect.y
+                || entered_position.x >= event.tile_rect.x + event.tile_rect.width
+                || entered_position.y >= event.tile_rect.y + event.tile_rect.height
+                || event.target_map != destination.name || event.target_place.empty()) continue;
+
+        for (const Event &place : destination.events) {
+            if (place.kind != EventKind::MapChange || !place.active
+                    || place.name != event.target_place || place.tile_rect.width <= 0
+                    || place.tile_rect.height <= 0) continue;
+            const int offset_x = entered_position.x - event.tile_rect.x;
+            const int offset_y = entered_position.y - event.tile_rect.y;
+            transition.target_map = event.target_map;
+            transition.target_place = event.target_place;
+            transition.destination = {
+                place.tile_rect.x + std::min(offset_x, place.tile_rect.width - 1),
+                place.tile_rect.y + std::min(offset_y, place.tile_rect.height - 1),
+            };
+            return true;
+        }
+    }
+    return false;
+}
+
 ViewTransform camera_for_player(
     const Document &document,
     GridPosition player,
@@ -587,6 +620,17 @@ bool load_tmx(
                 tileset.image_source = attribute_string(image, "source");
                 tileset.image_width = attribute_integer(image, "width", 0);
                 tileset.image_height = attribute_integer(image, "height", 0);
+            }
+            if (tileset.columns <= 0 && tileset.image_width > 0
+                    && tileset.declared_tile_width > 0
+                    && tileset.image_width % tileset.declared_tile_width == 0) {
+                tileset.columns = tileset.image_width / tileset.declared_tile_width;
+            }
+            if (tileset.tile_count == 0 && tileset.columns > 0 && tileset.image_height > 0
+                    && tileset.declared_tile_height > 0
+                    && tileset.image_height % tileset.declared_tile_height == 0) {
+                tileset.tile_count = static_cast<std::uint32_t>(tileset.columns
+                    * (tileset.image_height / tileset.declared_tile_height));
             }
             parsed.tilesets.push_back(tileset);
         } else if (include_layers && std::strcmp(element_name, "layer") == 0) {

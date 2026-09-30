@@ -46,6 +46,12 @@ struct GridPosition {
     int y;
 };
 
+struct MapTransition {
+    std::string target_map;
+    std::string target_place;
+    GridPosition destination;
+};
+
 struct ViewTransform {
     int camera_x;
     int camera_y;
@@ -256,6 +262,13 @@ const Layer *find_layer(const Document &document, const std::string &name);
 bool resolve_tile_source(const Document &document, std::uint32_t gid, TileSource &source);
 bool is_walkable(const Document &document, int x, int y);
 bool move_player(const Document &document, GridPosition &position, int dx, int dy);
+bool resolve_map_transition(
+    const TranslatedDocument &source,
+    const TranslatedDocument &destination,
+    const std::string &event_name,
+    GridPosition entered_position,
+    MapTransition &transition
+);
 ViewTransform camera_for_player(
     const Document &document,
     GridPosition player,

@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 import zlib
 from pathlib import Path
 
-INITIAL_MAP = "home"
+RENDER_MAPS = ("home", "crossglen", "wild1")
 RENDERED_LAYERS = {"base", "ground", "objects", "above", "top"}
 ANDROID_GID_FLAGS = 0xF0000000
 
@@ -79,78 +79,92 @@ def _layer_gids(layer: ET.Element, width: int, height: int) -> tuple[int, ...]:
     return struct.unpack(f"<{width * height}I", decoded)
 
 
-def copy_home_render_assets(source_root: Path, project_root: Path) -> tuple[int, int]:
+def copy_map_render_assets(
+    source_root: Path,
+    project_root: Path,
+    map_names: tuple[str, ...] = RENDER_MAPS,
+) -> tuple[int, int]:
     xml_root = source_root / "res" / "xml"
-    map_path = xml_root / f"{INITIAL_MAP}.tmx"
-    if not map_path.is_file():
-        raise ValueError(f"initial Android map is missing: {map_path}")
-
-    map_root = ET.parse(map_path).getroot()
-    width = int(map_root.get("width", "0"))
-    height = int(map_root.get("height", "0"))
-    if width <= 0 or height <= 0:
-        raise ValueError(f"invalid dimensions in {map_path}")
-
-    tilesets = []
-    for element in map_root.findall("tileset"):
-        image = element.find("image")
-        if image is None or not image.get("source"):
-            continue
-        tilesets.append({
-            "first_gid": int(element.get("firstgid", "1")),
-            "tile_count": int(element.get("tilecount", "0")),
-            "name": element.get("name", ""),
-            "image_source": image.get("source"),
-        })
-
-    used_gids = set()
-    for layer in map_root.findall("layer"):
-        if layer.get("name", "").lower() in RENDERED_LAYERS:
-            used_gids.update(gid & ~ANDROID_GID_FLAGS
-                for gid in _layer_gids(layer, width, height) if gid != 0)
-
-    used_tilesets = []
-    for gid in sorted(used_gids):
-        tileset = next((candidate for candidate in reversed(tilesets)
-            if candidate["first_gid"] <= gid), None)
-        if tileset is None or gid - tileset["first_gid"] >= tileset["tile_count"]:
-            raise ValueError(f"Home layer GID {gid} has no valid Android tileset")
-        if tileset not in used_tilesets:
-            used_tilesets.append(tileset)
-    used_tilesets.sort(key=lambda tileset: tileset["first_gid"])
-
+    used_images = []
+    source_path_by_name = {}
     android_res = source_root / "res"
-    source_files = []
-    seen_names = set()
-    for tileset in used_tilesets:
-        source_path = (xml_root / tileset["image_source"]).resolve()
-        if android_res.resolve() not in source_path.parents or not source_path.is_file():
-            raise ValueError(f"Android tileset image is missing or outside res: {tileset['image_source']}")
-        if source_path.name in seen_names:
-            raise ValueError(f"duplicate Home tileset image basename: {source_path.name}")
-        seen_names.add(source_path.name)
-        source_files.append(source_path)
+    for map_name in map_names:
+        if not map_name or "/" in map_name or "\\" in map_name:
+            raise ValueError(f"invalid map name for renderer asset bundle: {map_name!r}")
+        map_path = xml_root / f"{map_name}.tmx"
+        if not map_path.is_file():
+            raise ValueError(f"Android renderer map is missing: {map_path}")
+        map_root = ET.parse(map_path).getroot()
+        width = int(map_root.get("width", "0"))
+        height = int(map_root.get("height", "0"))
+        if width <= 0 or height <= 0:
+            raise ValueError(f"invalid dimensions in {map_path}")
+
+        tilesets = []
+        for element in map_root.findall("tileset"):
+            image = element.find("image")
+            if image is None or not image.get("source"):
+                continue
+            tile_width = int(element.get("tilewidth", "32"))
+            tile_height = int(element.get("tileheight", "32"))
+            image_width = int(image.get("width", "0"))
+            image_height = int(image.get("height", "0"))
+            columns = int(element.get("columns", "0"))
+            if columns <= 0 and tile_width > 0 and image_width > 0:
+                columns = image_width // tile_width
+            tile_count = int(element.get("tilecount", "0"))
+            if tile_count <= 0 and columns > 0 and tile_height > 0 and image_height > 0:
+                tile_count = columns * (image_height // tile_height)
+            tilesets.append({
+                "first_gid": int(element.get("firstgid", "1")),
+                "tile_count": tile_count,
+                "image_source": image.get("source"),
+            })
+
+        used_gids = set()
+        for layer in map_root.findall("layer"):
+            if layer.get("name", "").lower() in RENDERED_LAYERS:
+                used_gids.update(gid & ~ANDROID_GID_FLAGS
+                    for gid in _layer_gids(layer, width, height) if gid != 0)
+
+        used_tilesets = []
+        for gid in sorted(used_gids):
+            tileset = next((candidate for candidate in reversed(tilesets)
+                if candidate["first_gid"] <= gid), None)
+            if tileset is None or gid - tileset["first_gid"] >= tileset["tile_count"]:
+                raise ValueError(f"{map_name} layer GID {gid} has no valid Android tileset")
+            if tileset not in used_tilesets:
+                used_tilesets.append(tileset)
+        used_tilesets.sort(key=lambda tileset: tileset["first_gid"])
+
+        for tileset in used_tilesets:
+            source_path = (xml_root / tileset["image_source"]).resolve()
+            if android_res.resolve() not in source_path.parents or not source_path.is_file():
+                raise ValueError(f"Android tileset image is missing or outside res: {tileset['image_source']}")
+            if source_path.name not in used_images:
+                used_images.append(source_path.name)
+                source_path_by_name[source_path.name] = source_path
 
     hero_path = android_res / "drawable" / "char_hero.png"
     if not hero_path.is_file():
         raise ValueError(f"original player image is missing: {hero_path}")
-    if hero_path.name in seen_names:
+    if hero_path.name in used_images:
         raise ValueError("player image conflicts with a map tileset image")
-    source_files.append(hero_path)
+    source_path_by_name[hero_path.name] = hero_path
+    source_names = used_images + [hero_path.name]
 
-    asset_directory = project_root / "assets" / "map" / INITIAL_MAP
+    asset_directory = project_root / "assets" / "map" / "home"
     asset_directory.mkdir(parents=True, exist_ok=True)
     gfx_directory = project_root / "romfs" / "gfx"
     gfx_directory.mkdir(parents=True, exist_ok=True)
-    for path in source_files:
-        shutil.copyfile(path, asset_directory / path.name)
+    for name in source_names:
+        shutil.copyfile(source_path_by_name[name], asset_directory / name)
 
-    names = [path.name for path in source_files]
     (gfx_directory / "tilesets.list").write_text(
-        "".join(f"{name}\n" for name in names), encoding="ascii"
+        "".join(f"{name}\n" for name in source_names), encoding="ascii"
     )
-    byte_count = sum(path.stat().st_size for path in source_files)
-    return len(source_files), byte_count
+    byte_count = sum(source_path_by_name[name].stat().st_size for name in source_names)
+    return len(source_names), byte_count
 
 
 def main() -> None:
@@ -162,11 +176,19 @@ def main() -> None:
         default=Path(__file__).resolve().parents[1],
         help="native 3DS project root",
     )
+    parser.add_argument(
+        "--render-maps",
+        nargs="+",
+        default=RENDER_MAPS,
+        help="Android map IDs whose default layer textures should be bundled",
+    )
     arguments = parser.parse_args()
     map_count, byte_count = copy_map_data(arguments.source, arguments.project)
     print(f"Bundled {map_count} Android maps and worldmap.xml ({byte_count} bytes)")
-    image_count, image_bytes = copy_home_render_assets(arguments.source, arguments.project)
-    print(f"Bundled {image_count - 1} original Home tilesets and player image ({image_bytes} bytes)")
+    image_count, image_bytes = copy_map_render_assets(
+        arguments.source, arguments.project, tuple(arguments.render_maps)
+    )
+    print(f"Bundled original tile/player images for {', '.join(arguments.render_maps)} ({image_count} images, {image_bytes} bytes)")
 
 
 if __name__ == "__main__":

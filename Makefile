@@ -62,10 +62,11 @@ clean:
 	@rm -rf $(BUILD) $(TARGET).elf $(TARGET).3dsx $(TARGET).smdh $(TARGET).lst $(TARGET).map
 	@rm -f $(ROMFS)/gfx/*.t3x
 
-test: $(BUILD)/host-tests/test_game_json $(BUILD)/host-tests/test_game_resources $(BUILD)/host-tests/test_game_map
+test: $(BUILD)/host-tests/test_game_json $(BUILD)/host-tests/test_game_resources $(BUILD)/host-tests/test_game_map $(BUILD)/host-tests/test_game_interactions
 	$(BUILD)/host-tests/test_game_json
 	$(BUILD)/host-tests/test_game_resources romfs/game_data.pack
 	$(BUILD)/host-tests/test_game_map romfs/maps
+	$(BUILD)/host-tests/test_game_interactions romfs/game_data.pack
 	python3 -m unittest discover -s tests -p 'test_build_*.py' -v
 
 $(BUILD)/host-tests:
@@ -78,6 +79,18 @@ $(BUILD)/host-tests/test_game_resources: source/core/game_json.c source/core/gam
 	gcc -std=c11 -Wall -Wextra -Werror -Isource/core $^ -lz -o $@
 
 $(BUILD)/host-tests/test_game_map: source/core/game_map.cpp tests/test_game_map.cpp | $(BUILD)/host-tests
+	g++ -std=c++11 -Wall -Wextra -Werror -Isource/core $^ -ltinyxml2 -lz -o $@
+
+$(BUILD)/host-tests/game_json.o: source/core/game_json.c | $(BUILD)/host-tests
+	gcc -std=c11 -Wall -Wextra -Werror -Isource/core -c $< -o $@
+
+$(BUILD)/host-tests/game_resources.o: source/core/game_resources.c | $(BUILD)/host-tests
+	gcc -std=c11 -Wall -Wextra -Werror -Isource/core -c $< -o $@
+
+$(BUILD)/host-tests/game_resource_index.o: source/core/game_resource_index.c | $(BUILD)/host-tests
+	gcc -std=c11 -Wall -Wextra -Werror -Isource/core -c $< -o $@
+
+$(BUILD)/host-tests/test_game_interactions: source/core/game_map.cpp tests/test_game_interactions.cpp $(BUILD)/host-tests/game_json.o $(BUILD)/host-tests/game_resources.o $(BUILD)/host-tests/game_resource_index.o | $(BUILD)/host-tests
 	g++ -std=c++11 -Wall -Wextra -Werror -Isource/core $^ -ltinyxml2 -lz -o $@
 else
 DEPENDS := $(OFILES:.o=.d)
