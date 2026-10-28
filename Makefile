@@ -62,17 +62,21 @@ clean:
 	@rm -rf $(BUILD) $(TARGET).elf $(TARGET).3dsx $(TARGET).smdh $(TARGET).lst $(TARGET).map
 	@rm -f $(ROMFS)/gfx/*.t3x
 
-test: $(BUILD)/host-tests/test_game_json $(BUILD)/host-tests/test_game_resources $(BUILD)/host-tests/test_game_map $(BUILD)/host-tests/test_game_interactions
+test: $(BUILD)/host-tests/test_game_json $(BUILD)/host-tests/test_game_resources $(BUILD)/host-tests/test_game_map $(BUILD)/host-tests/test_game_interactions $(BUILD)/host-tests/test_game_core
 	$(BUILD)/host-tests/test_game_json
 	$(BUILD)/host-tests/test_game_resources romfs/game_data.pack
 	$(BUILD)/host-tests/test_game_map romfs/maps
-	$(BUILD)/host-tests/test_game_interactions romfs/game_data.pack
+	$(BUILD)/host-tests/test_game_interactions romfs/game_data.pack $(BUILD)/host-tests/game-combat-save.tmp
+	$(BUILD)/host-tests/test_game_core $(BUILD)/host-tests/game-core-save.tmp
 	python3 -m unittest discover -s tests -p 'test_build_*.py' -v
 
 $(BUILD)/host-tests:
 	@mkdir -p $@
 
 $(BUILD)/host-tests/test_game_json: source/core/game_json.c tests/test_game_json.c | $(BUILD)/host-tests
+	gcc -std=c11 -Wall -Wextra -Werror -Isource/core $^ -o $@
+
+$(BUILD)/host-tests/test_game_core: source/core/game_core.c tests/test_game_core.c | $(BUILD)/host-tests
 	gcc -std=c11 -Wall -Wextra -Werror -Isource/core $^ -o $@
 
 $(BUILD)/host-tests/test_game_resources: source/core/game_json.c source/core/game_resources.c source/core/game_resource_index.c tests/test_game_resources.c | $(BUILD)/host-tests
@@ -90,7 +94,10 @@ $(BUILD)/host-tests/game_resources.o: source/core/game_resources.c | $(BUILD)/ho
 $(BUILD)/host-tests/game_resource_index.o: source/core/game_resource_index.c | $(BUILD)/host-tests
 	gcc -std=c11 -Wall -Wextra -Werror -Isource/core -c $< -o $@
 
-$(BUILD)/host-tests/test_game_interactions: source/core/game_map.cpp tests/test_game_interactions.cpp $(BUILD)/host-tests/game_json.o $(BUILD)/host-tests/game_resources.o $(BUILD)/host-tests/game_resource_index.o | $(BUILD)/host-tests
+$(BUILD)/host-tests/game_core.o: source/core/game_core.c | $(BUILD)/host-tests
+	gcc -std=c11 -Wall -Wextra -Werror -Isource/core -c $< -o $@
+
+$(BUILD)/host-tests/test_game_interactions: source/core/game_map.cpp source/core/game_dialogue.cpp source/core/game_items.cpp source/core/game_combat.cpp tests/test_game_interactions.cpp $(BUILD)/host-tests/game_json.o $(BUILD)/host-tests/game_resources.o $(BUILD)/host-tests/game_resource_index.o $(BUILD)/host-tests/game_core.o | $(BUILD)/host-tests
 	g++ -std=c++11 -Wall -Wextra -Werror -Isource/core $^ -ltinyxml2 -lz -o $@
 else
 DEPENDS := $(OFILES:.o=.d)

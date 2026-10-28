@@ -1,6 +1,10 @@
 #include "map_renderer.hpp"
+#include "game_combat.hpp"
+#include "game_items.hpp"
 
 #include <cctype>
+#include <climits>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <sstream>
@@ -28,6 +32,53 @@ bool contains(const map::Rect &rect, map::GridPosition point)
 {
     return point.x >= rect.x && point.y >= rect.y
         && point.x < rect.x + rect.width && point.y < rect.y + rect.height;
+}
+
+int distance_to_tile(map::GridPosition from, map::GridPosition to)
+{
+    return std::abs(from.x - to.x) + std::abs(from.y - to.y);
+}
+
+std::string rat_state_id(int rat_index, const char *suffix)
+{
+    std::ostringstream id;
+    id << "mikhail_rat" << rat_index << "_" << suffix;
+    return id.str();
+}
+
+const map::SpawnArea *find_spawn_area(
+    const map::TranslatedDocument &translated,
+    const std::string &spawn_group
+)
+{
+    for (const map::SpawnArea &area : translated.spawn_areas) {
+        if (area.active_for_new_game && area.spawn_group == spawn_group) return &area;
+    }
+    return NULL;
+}
+
+bool spawn_position(
+    const map::Document &document,
+    const map::TranslatedDocument &translated,
+    const std::string &spawn_group,
+    int spawn_index,
+    map::GridPosition &position
+)
+{
+    const map::SpawnArea *area = find_spawn_area(translated, spawn_group);
+    if (area == NULL || spawn_index < 0 || spawn_index >= area->quantity) return false;
+
+    int walkable_count = 0;
+    for (int y = area->tile_rect.y; y < area->tile_rect.y + area->tile_rect.height; ++y) {
+        for (int x = area->tile_rect.x; x < area->tile_rect.x + area->tile_rect.width; ++x) {
+            if (!map::is_walkable(document, x, y)) continue;
+            if (walkable_count++ == spawn_index) {
+                position = {x, y};
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 bool phrase_message(GameResources *resources, const std::string &phrase_id, std::string &message)
@@ -62,8 +113,9 @@ std::string requirement_description(const map::Requirement &requirement)
 }
 
 MapRenderer::MapRenderer()
-    : player_({0, 0}), resources_(NULL), player_image_({NULL, NULL}),
-      modal_interaction_(false), initialized_(false)
+    : player_({0, 0}), resources_(NULL), core_(NULL), conversation_(NULL, NULL),
+      selected_conversation_reply_(0), player_image_({NULL, NULL}),
+      modal_interaction_(false), shop_interaction_(false), initialized_(false)
 {
 }
 
@@ -85,9 +137,13 @@ void MapRenderer::dispose()
     translated_ = map::TranslatedDocument();
     maps_directory_.clear();
     interaction_message_.clear();
+    conversation_.set_context(NULL, NULL);
     resources_ = NULL;
+    core_ = NULL;
+    selected_conversation_reply_ = 0;
     player_image_ = {NULL, NULL};
     modal_interaction_ = false;
+    shop_interaction_ = false;
     initialized_ = false;
 }
 
@@ -97,17 +153,20 @@ bool MapRenderer::initialize(
     const char *tileset_list_path,
     const char *texture_directory,
     GameResources *resources,
+    GameCore *core,
     std::string &error
 )
 {
     dispose();
     if (maps_directory == NULL || initial_map_id == NULL || tileset_list_path == NULL
-            || texture_directory == NULL || resources == NULL) {
+            || texture_directory == NULL || resources == NULL || core == NULL) {
         error = "invalid map renderer configuration";
         return false;
     }
     maps_directory_ = maps_directory;
     resources_ = resources;
+    core_ = core;
+    conversation_.set_context(resources_, core_);
     if (!load_tileset_sheets(tileset_list_path, texture_directory, error)) {
         dispose();
         return false;
@@ -384,9 +443,9 @@ bool MapRenderer::handle_map_event(const map::Event &event, map::GridPosition en
         show_sign(event);
         return true;
     case map::EventKind::Rest:
-        interaction_message_ = "Rest point: " + document_.name + ":" + event.name
-            + "\nAndroid rest confirmation is required. Recovery, world reset,"
-            + " and respawn updates are deferred.";
+        game_core_restore_player(core_);
+        interaction_message_ = "Rested at " + document_.name + ":" + event.name
+            + ". Health restored.";
         modal_interaction_ = true;
         return true;
     case map::EventKind::Container:
@@ -412,47 +471,31 @@ void MapRenderer::show_sign(const map::Event &event)
 
 void MapRenderer::show_container(const map::Event &event)
 {
-    interaction_message_ = "Container " + event.name + "\n";
     if (resources_ == NULL || event.drop_list_id.empty()) {
-        interaction_message_ += "Original drop-list reference is unavailable.";
+        interaction_message_ = "Container " + event.name
+            + ": original drop-list reference is unavailable.";
         modal_interaction_ = true;
         return;
     }
-    const GameResourceRecordEntry *record = game_resources_find(
-        GAME_RESOURCE_DROP_LIST, event.drop_list_id.c_str(), NULL
-    );
-    if (record == NULL) {
-        interaction_message_ += "Original drop list not found: " + event.drop_list_id;
+    const std::string opened_flag = "container_" + event.name;
+    if (game_core_quest_progress(core_, opened_flag.c_str()) > 0) {
+        interaction_message_ = "Container " + event.name + " has already been opened.";
         modal_interaction_ = true;
         return;
     }
-    GameJsonDocument document;
-    GameJsonRef drop_list;
-    if (!game_resources_open_record(resources_, record, &document, &drop_list)) {
-        interaction_message_ += "Original drop list could not be read: " + event.drop_list_id;
+    const GameCore previous_state = *core_;
+    if (!items::apply_drop_list(resources_, core_, event.drop_list_id, interaction_message_)
+            || !game_core_set_quest_progress(core_, opened_flag.c_str(), 1)) {
+        *core_ = previous_state;
+        if (interaction_message_.empty()) {
+            interaction_message_ = "Container could not be opened: " + event.name;
+        }
         modal_interaction_ = true;
         return;
     }
-    const GameJsonRef items = game_json_object_get(drop_list, "items");
-    std::ostringstream text;
-    text << "Original drop list " << event.drop_list_id << ":\n";
-    const size_t count = game_json_array_size(items);
-    for (size_t index = 0; index < count; ++index) {
-        const GameJsonRef item = game_json_array_get(items, index);
-        char item_id[96] = "?";
-        char chance[24] = "?";
-        game_json_string_copy(game_json_object_get(item, "itemID"), item_id, sizeof(item_id));
-        game_json_string_copy(game_json_object_get(item, "chance"), chance, sizeof(chance));
-        const GameJsonRef quantity = game_json_object_get(item, "quantity");
-        int64_t minimum = 0;
-        int64_t maximum = 0;
-        game_json_integer(game_json_object_get(quantity, "min"), &minimum);
-        game_json_integer(game_json_object_get(quantity, "max"), &maximum);
-        text << item_id << " " << chance << " x" << minimum << "-" << maximum << "\n";
-    }
-    text << "Drop rolls and inventory pickup are deferred.";
-    interaction_message_ += text.str();
-    game_json_dispose(&document);
+    std::ostringstream message;
+    message << "Opened " << event.name << ". Supplies added to your inventory.";
+    interaction_message_ = message.str();
     modal_interaction_ = true;
 }
 
@@ -473,6 +516,13 @@ bool MapRenderer::move_player(int dx, int dy)
     const map::GridPosition previous = player_;
     map::GridPosition next = player_;
     if (!map::move_player(document_, next, dx, dy)) return false;
+
+    map::GridPosition actor_position;
+    if (document_.name == "home"
+            && spawn_position(document_, translated_, "mikhail", 0, actor_position)
+            && next.x == actor_position.x && next.y == actor_position.y) {
+        return false;
+    }
 
     for (const map::Event &event : translated_.events) {
         if (event.kind != map::EventKind::Key || !event.active || !contains(event.tile_rect, next)
@@ -497,6 +547,144 @@ bool MapRenderer::move_player(int dx, int dy)
     return true;
 }
 
+bool MapRenderer::interact()
+{
+    if (!initialized_ || modal_interaction_) return false;
+    for (const map::Event &event : translated_.events) {
+        if (event.kind != map::EventKind::Container || !event.active) continue;
+        const map::GridPosition target = {event.tile_rect.x, event.tile_rect.y};
+        if (!contains(event.tile_rect, player_)
+                && distance_to_tile(player_, target) > 1) continue;
+        shop_interaction_ = false;
+        show_container(event);
+        return true;
+    }
+    if (can_shop_with_mara()) {
+        int bread_price = 0;
+        std::string error;
+        if (!items::item_price(resources_, "bread", bread_price, error)) {
+            interaction_message_ = "Mara's shop: " + error;
+            shop_interaction_ = true;
+            modal_interaction_ = true;
+            return false;
+        }
+        std::ostringstream message;
+        message << "Mara's shop\nBread: " << bread_price
+            << " gold\nYour gold: " << game_core_inventory_count(core_, "gold");
+        interaction_message_ = message.str();
+        shop_interaction_ = true;
+        modal_interaction_ = true;
+        return true;
+    }
+    if (can_talk_to_mikhail()) {
+        std::string error;
+        if (!conversation_.start("mikhail_start_select", error)) {
+            interaction_message_ = "Mikhail: " + error;
+            modal_interaction_ = true;
+            return false;
+        }
+        selected_conversation_reply_ = 0;
+        interaction_message_ = "Mikhail\n" + conversation_.message();
+        shop_interaction_ = false;
+        modal_interaction_ = true;
+        return true;
+    }
+    interaction_message_ = "No one nearby to talk to.";
+    shop_interaction_ = false;
+    modal_interaction_ = true;
+    return false;
+}
+
+bool MapRenderer::can_talk_to_mikhail() const
+{
+    if (!initialized_ || modal_interaction_ || document_.name != "home") return false;
+    map::GridPosition mikhail;
+    return spawn_position(document_, translated_, "mikhail", 0, mikhail)
+        && distance_to_tile(player_, mikhail) <= 2;
+}
+
+bool MapRenderer::can_shop_with_mara() const
+{
+    if (!initialized_ || modal_interaction_ || document_.name != "crossglen_hall") return false;
+    map::GridPosition mara;
+    return spawn_position(document_, translated_, "Mara", 0, mara)
+        && distance_to_tile(player_, mara) <= 1;
+}
+
+const char *MapRenderer::nearby_interaction_hint() const
+{
+    if (!initialized_ || modal_interaction_) return "";
+    if (can_talk_to_mikhail()) return "MIKHAIL NEARBY - A: TALK";
+    if (can_shop_with_mara()) return "MARA'S SHOP - A: BUY";
+    if (document_.name == "crossglen"
+            && game_core_quest_progress(core_, "mikhail_rats") == 10) {
+        for (int index = 0; index < 2; ++index) {
+            const std::string defeated_flag = rat_state_id(index + 1, "defeated");
+            map::GridPosition rat;
+            if (game_core_quest_progress(core_, defeated_flag.c_str()) == 0
+                    && spawn_position(document_, translated_, "trainingrat", index, rat)
+                    && distance_to_tile(player_, rat) <= 1) {
+                return "TRAINING RAT NEARBY - X: ATTACK";
+            }
+        }
+    }
+    return "";
+}
+
+bool MapRenderer::attack_nearby_rat()
+{
+    if (!initialized_ || modal_interaction_ || document_.name != "crossglen"
+            || game_core_quest_progress(core_, "mikhail_rats") != 10) return false;
+
+    int target_index = 0;
+    for (; target_index < 2; ++target_index) {
+        const std::string defeated_flag = rat_state_id(target_index + 1, "defeated");
+        if (game_core_quest_progress(core_, defeated_flag.c_str()) > 0) continue;
+        map::GridPosition target;
+        if (spawn_position(document_, translated_, "trainingrat", target_index, target)
+                && distance_to_tile(player_, target) <= 1) break;
+    }
+    if (target_index == 2) {
+        interaction_message_ = "No training rat is close enough to attack.";
+        modal_interaction_ = true;
+        return false;
+    }
+
+    std::string error;
+    const int rat_index = target_index + 1;
+    std::ostringstream instance_id;
+    instance_id << "mikhail_rat" << rat_index;
+    combat::AttackResult result;
+    if (!combat::attack_monster(resources_, core_, "tobby_trainingrat", "trainingrat",
+            instance_id.str(), 1, result, error)) {
+        interaction_message_ = "Combat failed: " + error;
+        modal_interaction_ = true;
+        return false;
+    }
+
+    std::ostringstream message;
+    if (result.enemy_defeated) {
+        message << "Training rat defeated. A training-rat tail was added to your bag.";
+    } else {
+        message << "You hit the training rat (" << result.enemy_health << " HP left).";
+    }
+    if (result.player_knocked_out) {
+        game_core_restore_player(core_);
+        std::string respawn_error;
+        if (load_map("home", "rest", map::EventKind::Rest, 0, 0, respawn_error)) {
+            message << "\nYou were knocked out and woke at home.";
+        } else {
+            message << "\nYou were knocked out; returning home failed: " << respawn_error;
+        }
+    } else if (result.damage_taken > 0) {
+        message << "\nThe rat hit you for " << result.damage_taken << ".";
+    }
+    interaction_message_ = message.str();
+    shop_interaction_ = false;
+    modal_interaction_ = true;
+    return true;
+}
+
 bool MapRenderer::has_modal_interaction() const
 {
     return modal_interaction_;
@@ -504,8 +692,84 @@ bool MapRenderer::has_modal_interaction() const
 
 void MapRenderer::dismiss_modal_interaction()
 {
+    conversation_.close();
     modal_interaction_ = false;
     interaction_message_.clear();
+    selected_conversation_reply_ = 0;
+    shop_interaction_ = false;
+}
+
+bool MapRenderer::has_conversation() const
+{
+    return conversation_.active();
+}
+
+bool MapRenderer::has_shop() const
+{
+    return shop_interaction_;
+}
+
+bool MapRenderer::buy_shop_bread(std::string &error)
+{
+    if (!shop_interaction_) {
+        error = "shop is not open";
+        interaction_message_ = "Mara's shop: " + error;
+        return false;
+    }
+    int bread_price = 0;
+    if (!items::item_price(resources_, "bread", bread_price, error)) {
+        interaction_message_ = "Mara's shop: " + error;
+        return false;
+    }
+    if (!items::buy_item(resources_, core_, "bread", 1, error)) {
+        interaction_message_ = "Mara's shop: " + error;
+        return false;
+    }
+    std::ostringstream message;
+    message << "Mara's shop\nBread bought for " << bread_price
+        << " gold.\nYour gold: " << game_core_inventory_count(core_, "gold");
+    interaction_message_ = message.str();
+    error.clear();
+    return true;
+}
+
+const std::vector<dialogue::Reply> &MapRenderer::conversation_replies() const
+{
+    return conversation_.replies();
+}
+
+std::size_t MapRenderer::selected_conversation_reply() const
+{
+    return selected_conversation_reply_;
+}
+
+void MapRenderer::move_conversation_selection(int direction)
+{
+    const std::size_t count = conversation_.replies().size();
+    if (!conversation_.active() || count == 0 || direction == 0) return;
+    if (direction < 0) {
+        selected_conversation_reply_ = selected_conversation_reply_ == 0
+            ? count - 1 : selected_conversation_reply_ - 1;
+    } else {
+        selected_conversation_reply_ = (selected_conversation_reply_ + 1) % count;
+    }
+}
+
+bool MapRenderer::choose_conversation_reply(std::string &error)
+{
+    if (!conversation_.active()) {
+        error = "no conversation is active";
+        interaction_message_ = "Mikhail: " + error;
+        return false;
+    }
+    if (!conversation_.choose(selected_conversation_reply_, error)) {
+        interaction_message_ = "Mikhail: " + error;
+        return false;
+    }
+    selected_conversation_reply_ = 0;
+    interaction_message_ = "Mikhail\n" + conversation_.message();
+    error.clear();
+    return true;
 }
 
 const std::string &MapRenderer::interaction_message() const
@@ -548,6 +812,43 @@ void MapRenderer::draw_gid(std::uint32_t gid, int screen_x, int screen_y, float 
     C2D_DrawImageAt(image, static_cast<float>(screen_x), static_cast<float>(screen_y), depth, NULL);
 }
 
+void MapRenderer::draw_actor_icon(
+    const char *sheet_name,
+    std::uint32_t icon_index,
+    map::GridPosition position,
+    const map::ViewTransform &view,
+    float depth
+) const
+{
+    const std::map<std::string, std::size_t>::const_iterator sheet =
+        image_indices_.find(sheet_name);
+    if (sheet == image_indices_.end()) return;
+    const C2D_Image whole = C2D_SpriteSheetGetImage(sheets_[sheet->second], 0);
+    if (whole.subtex == NULL || whole.subtex->width % 32 != 0
+            || whole.subtex->height % 32 != 0) return;
+    const std::uint32_t columns = whole.subtex->width / 32;
+    const std::uint32_t rows = whole.subtex->height / 32;
+    if (columns == 0 || icon_index >= columns * rows) return;
+
+    const std::uint32_t tile_x = icon_index % columns;
+    const std::uint32_t tile_y = icon_index / columns;
+    const float u_range = whole.subtex->right - whole.subtex->left;
+    const float v_range = whole.subtex->bottom - whole.subtex->top;
+    Tex3DS_SubTexture subtexture;
+    subtexture.width = 32;
+    subtexture.height = 32;
+    subtexture.left = whole.subtex->left + (tile_x * 32.0f / whole.subtex->width) * u_range;
+    subtexture.right = whole.subtex->left + ((tile_x + 1) * 32.0f / whole.subtex->width) * u_range;
+    subtexture.top = whole.subtex->top + (tile_y * 32.0f / whole.subtex->height) * v_range;
+    subtexture.bottom = whole.subtex->top + ((tile_y + 1) * 32.0f / whole.subtex->height) * v_range;
+
+    map::GridPosition screen;
+    if (!map::map_to_screen(view, position, screen)) return;
+    C2D_Image image = whole;
+    image.subtex = &subtexture;
+    C2D_DrawImageAt(image, static_cast<float>(screen.x), static_cast<float>(screen.y), depth, NULL);
+}
+
 void MapRenderer::draw(int screen_width, int screen_height) const
 {
     if (!initialized_) return;
@@ -557,7 +858,28 @@ void MapRenderer::draw(int screen_width, int screen_height) const
     draw_layer("base", view, 0.5f);
     draw_layer("ground", view, 0.5f);
     draw_layer("objects", view, 0.5f);
-
+    if (document_.name == "home") {
+        map::GridPosition mikhail;
+        if (spawn_position(document_, translated_, "mikhail", 0, mikhail)) {
+            draw_actor_icon("monsters_mage2.png", 0, mikhail, view, 0.45f);
+        }
+    } else if (document_.name == "crossglen_hall") {
+        map::GridPosition mara;
+        if (spawn_position(document_, translated_, "Mara", 0, mara)) {
+            draw_actor_icon("monsters_men.png", 7, mara, view, 0.45f);
+        }
+    } else if (document_.name == "crossglen") {
+        if (core_ != NULL && game_core_quest_progress(core_, "mikhail_rats") == 10) {
+            for (int index = 0; index < 2; ++index) {
+                const std::string defeated_flag = rat_state_id(index + 1, "defeated");
+                map::GridPosition rat;
+                if (game_core_quest_progress(core_, defeated_flag.c_str()) == 0
+                        && spawn_position(document_, translated_, "trainingrat", index, rat)) {
+                    draw_actor_icon("monsters_rats.png", 0, rat, view, 0.45f);
+                }
+            }
+        }
+    }
     map::GridPosition player_screen;
     if (map::map_to_screen(view, player_, player_screen)) {
         C2D_DrawImageAt(player_image_, static_cast<float>(player_screen.x),

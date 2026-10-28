@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 import zlib
 from pathlib import Path
 
-from tools.build_map_data import copy_map_render_assets, copy_map_data
+from tools.build_map_data import ACTOR_SPRITE_SHEETS, copy_map_render_assets, copy_map_data
 
 
 class MapDataBuilderTests(unittest.TestCase):
@@ -15,7 +15,7 @@ class MapDataBuilderTests(unittest.TestCase):
         required_images = []
         tilesets_by_image = {}
         used_cell_count = 0
-        for map_id in ("home", "crossglen", "wild1"):
+        for map_id in ("home", "crossglen", "crossglen_hall", "wild1"):
             map_root = ET.parse(project / "romfs" / "maps" / f"{map_id}.tmx").getroot()
             tilesets = []
             for element in map_root.findall("tileset"):
@@ -56,14 +56,24 @@ class MapDataBuilderTests(unittest.TestCase):
                 image_name = Path(tileset[2]).name
                 if image_name not in required_images:
                     required_images.append(image_name)
-        expected_list = required_images + ["char_hero.png"]
+        expected_list = required_images + ["char_hero.png"] + list(ACTOR_SPRITE_SHEETS)
 
         gfx_list = (project / "romfs" / "gfx" / "tilesets.list").read_text(encoding="ascii").splitlines()
         self.assertEqual(gfx_list, expected_list)
         for image_name in expected_list:
             image = project / "assets" / "map" / "home" / image_name
             self.assertTrue(image.is_file(), image_name)
-            if image_name != "char_hero.png":
+            if image_name in ACTOR_SPRITE_SHEETS:
+                png_header = image.read_bytes()[:24]
+                self.assertEqual(png_header[:8], b"\x89PNG\r\n\x1a\n")
+                dimensions = struct.unpack(">II", png_header[16:24])
+                expected_dimensions = {
+                    "monsters_mage2.png": (32, 32),
+                    "monsters_men.png": (288, 32),
+                    "monsters_rats.png": (160, 32),
+                }
+                self.assertEqual(dimensions, expected_dimensions[image_name])
+            elif image_name != "char_hero.png":
                 tileset = tilesets_by_image[image_name]
                 png_header = image.read_bytes()[:24]
                 self.assertEqual(png_header[:8], b"\x89PNG\r\n\x1a\n")
@@ -88,6 +98,10 @@ class MapDataBuilderTests(unittest.TestCase):
             (drawable / "ground.png").write_bytes(b"original-ground-png")
             (drawable / "replacement.png").write_bytes(b"replacement-only-png")
             (drawable / "char_hero.png").write_bytes(b"original-player-png")
+            actor_directory = root / "project" / "assets" / "map" / "home"
+            actor_directory.mkdir(parents=True)
+            for name in ACTOR_SPRITE_SHEETS:
+                (actor_directory / name).write_bytes(f"original-{name}".encode("ascii"))
 
             ground_data = base64.b64encode(zlib.compress(struct.pack("<2I", 1, 0))).decode("ascii")
             replacement_data = base64.b64encode(zlib.compress(struct.pack("<2I", 5, 5))).decode("ascii")
@@ -104,13 +118,25 @@ class MapDataBuilderTests(unittest.TestCase):
             count, byte_count = copy_map_render_assets(source, root / "project", ("home",))
 
             asset_directory = root / "project" / "assets" / "map" / "home"
-            self.assertEqual(count, 2)
-            self.assertEqual(byte_count, len(b"original-ground-png") + len(b"original-player-png"))
+            self.assertEqual(count, 2 + len(ACTOR_SPRITE_SHEETS))
+            self.assertEqual(
+                byte_count,
+                len(b"original-ground-png") + len(b"original-player-png")
+                + sum(len(f"original-{name}".encode("ascii")) for name in ACTOR_SPRITE_SHEETS),
+            )
             self.assertEqual((asset_directory / "ground.png").read_bytes(), b"original-ground-png")
             self.assertEqual((asset_directory / "char_hero.png").read_bytes(), b"original-player-png")
             self.assertFalse((asset_directory / "replacement.png").exists())
             gfx_list = (root / "project" / "romfs" / "gfx" / "tilesets.list").read_text(encoding="ascii")
-            self.assertEqual(gfx_list, "ground.png\nchar_hero.png\n")
+            self.assertEqual(
+                gfx_list,
+                "ground.png\nchar_hero.png\n" + "".join(f"{name}\n" for name in ACTOR_SPRITE_SHEETS),
+            )
+            for name in ACTOR_SPRITE_SHEETS:
+                self.assertEqual(
+                    (asset_directory / name).read_bytes(),
+                    f"original-{name}".encode("ascii"),
+                )
 
     def test_infers_old_tmx_tileset_grid_from_image_dimensions(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -122,6 +148,10 @@ class MapDataBuilderTests(unittest.TestCase):
             drawable.mkdir(parents=True)
             (drawable / "old_tiles.png").write_bytes(b"old tiles")
             (drawable / "char_hero.png").write_bytes(b"hero")
+            actor_directory = root / "project" / "assets" / "map" / "home"
+            actor_directory.mkdir(parents=True)
+            for name in ACTOR_SPRITE_SHEETS:
+                (actor_directory / name).write_bytes(f"original-{name}".encode("ascii"))
             layer = base64.b64encode(zlib.compress(struct.pack("<I", 100))).decode("ascii")
             (xml / "wild1.tmx").write_text(
                 """<map width="1" height="1"><tileset firstgid="1" name="old" tilewidth="32" tileheight="32"><image source="../drawable/old_tiles.png" width="576" height="192"/></tileset>
@@ -131,7 +161,7 @@ class MapDataBuilderTests(unittest.TestCase):
 
             count, _ = copy_map_render_assets(source, root / "project", ("wild1",))
 
-            self.assertEqual(count, 2)
+            self.assertEqual(count, 2 + len(ACTOR_SPRITE_SHEETS))
             self.assertTrue((root / "project/assets/map/home/old_tiles.png").is_file())
 
     def test_copies_only_configured_maps_and_worldmap(self):

@@ -12,9 +12,10 @@ import xml.etree.ElementTree as ET
 import zlib
 from pathlib import Path
 
-RENDER_MAPS = ("home", "crossglen", "wild1")
+RENDER_MAPS = ("home", "crossglen", "crossglen_hall", "wild1")
 RENDERED_LAYERS = {"base", "ground", "objects", "above", "top"}
 ANDROID_GID_FLAGS = 0xF0000000
+ACTOR_SPRITE_SHEETS = ("monsters_mage2.png", "monsters_men.png", "monsters_rats.png")
 
 def copy_map_data(source_root: Path, project_root: Path) -> tuple[int, int]:
     xml_root = source_root / "res" / "xml"
@@ -150,15 +151,23 @@ def copy_map_render_assets(
         raise ValueError(f"original player image is missing: {hero_path}")
     if hero_path.name in used_images:
         raise ValueError("player image conflicts with a map tileset image")
-    source_path_by_name[hero_path.name] = hero_path
-    source_names = used_images + [hero_path.name]
-
     asset_directory = project_root / "assets" / "map" / "home"
+    source_path_by_name[hero_path.name] = hero_path
+    for name in ACTOR_SPRITE_SHEETS:
+        actor_path = asset_directory / name
+        if not actor_path.is_file():
+            raise ValueError(f"original actor sprite sheet is missing: {actor_path}")
+        source_path_by_name[name] = actor_path
+    source_names = used_images + [hero_path.name] + list(ACTOR_SPRITE_SHEETS)
+
     asset_directory.mkdir(parents=True, exist_ok=True)
     gfx_directory = project_root / "romfs" / "gfx"
     gfx_directory.mkdir(parents=True, exist_ok=True)
     for name in source_names:
-        shutil.copyfile(source_path_by_name[name], asset_directory / name)
+        source_path = source_path_by_name[name]
+        target_path = asset_directory / name
+        if source_path.resolve() != target_path.resolve():
+            shutil.copyfile(source_path, target_path)
 
     (gfx_directory / "tilesets.list").write_text(
         "".join(f"{name}\n" for name in source_names), encoding="ascii"
@@ -188,7 +197,7 @@ def main() -> None:
     image_count, image_bytes = copy_map_render_assets(
         arguments.source, arguments.project, tuple(arguments.render_maps)
     )
-    print(f"Bundled original tile/player images for {', '.join(arguments.render_maps)} ({image_count} images, {image_bytes} bytes)")
+    print(f"Bundled original map/player/actor images for {', '.join(arguments.render_maps)} ({image_count} images, {image_bytes} bytes)")
 
 
 if __name__ == "__main__":
