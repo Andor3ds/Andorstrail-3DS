@@ -227,8 +227,17 @@ static void test_mikhail_quests(GameResources *resources)
 {
     GameCore core;
     game_core_init(&core);
-    andortrail::dialogue::Conversation conversation(resources, &core);
     std::string error;
+    GameCore starter_core;
+    game_core_init(&starter_core);
+    assert(andortrail::items::apply_drop_list(resources, &starter_core, "startitems", error));
+    assert(game_core_inventory_count(&starter_core, "gold") == 12);
+    assert(game_core_inventory_count(&starter_core, "club1") == 1);
+    assert(game_core_inventory_count(&starter_core, "shirt1") == 1);
+    assert(game_core_inventory_count(&starter_core, "ring_mikhail") == 1);
+    assert(game_core_inventory_count(&starter_core, "apple_green") == 2);
+
+    andortrail::dialogue::Conversation conversation(resources, &core);
     const auto choose = [&conversation, &error](std::size_t index) {
         if (conversation.choose(index, error)) return true;
         std::cerr << "Mikhail reply failed: " << error << "\n";
@@ -240,6 +249,9 @@ static void test_mikhail_quests(GameResources *resources)
     assert(!conversation.phrase_id().empty());
     assert(conversation.message().find("Oh good, you are awake.") != std::string::npos);
     assert(!conversation.replies().empty());
+    assert(conversation.choose(0, error));
+    assert(conversation.phrase_id() == "mikhail_visited");
+    assert(game_core_quest_progress(&core, "andor") == 1);
 
     conversation.close();
     assert(andortrail::items::apply_drop_list(resources, &core, "startitems2", error));
@@ -299,10 +311,17 @@ static void test_training_rat_combat(GameResources *resources, const char *save_
     std::string error;
 
     const int health_before_attack = core.health;
-    assert(andortrail::combat::attack_monster(resources, &core, "tobby_trainingrat",
-        "trainingrat", "mikhail_rat1", 1, result, error));
-    assert(!result.enemy_defeated && result.enemy_health == 1);
-    assert(core.health == health_before_attack - result.damage_taken);
+    int total_damage_taken = 0;
+    for (int attempt = 0; attempt < 12; ++attempt) {
+        assert(andortrail::combat::attack_monster(resources, &core, "tobby_trainingrat",
+            "trainingrat", "mikhail_rat1", core.attack_damage, result, error));
+        total_damage_taken += result.damage_taken;
+        if (result.enemy_health == 1) break;
+        assert(!result.enemy_defeated);
+    }
+    assert(!result.enemy_defeated && result.enemy_health == 1 && result.player_hit);
+    assert(result.experience_gained == 0 && core.total_experience == 1);
+    assert(core.health == health_before_attack - total_damage_taken);
     assert(game_core_save(&core, save_path));
     const int saved_player_health = core.health;
     const uint32_t saved_random_state = core.random_state;
@@ -313,19 +332,25 @@ static void test_training_rat_combat(GameResources *resources, const char *save_
     assert(game_core_quest_progress(&loaded_core, "mikhail_rat1_health") == 1);
     assert(loaded_core.health == saved_player_health);
     assert(loaded_core.random_state == saved_random_state);
+    assert(loaded_core.total_experience == 1);
     core = loaded_core;
 
-    assert(andortrail::combat::attack_monster(resources, &core, "tobby_trainingrat",
-        "trainingrat", "mikhail_rat1", 1, result, error));
+    result.enemy_defeated = false;
+    for (int attempt = 0; attempt < 12 && !result.enemy_defeated; ++attempt) {
+        assert(andortrail::combat::attack_monster(resources, &core, "tobby_trainingrat",
+            "trainingrat", "mikhail_rat1", core.attack_damage, result, error));
+    }
     assert(result.enemy_defeated && result.enemy_health == 0);
+    assert(result.experience_gained == 3 && core.total_experience == 4);
     assert(game_core_inventory_count(&core, "tail_trainingrat") == 1);
 
-    assert(andortrail::combat::attack_monster(resources, &core, "tobby_trainingrat",
-        "trainingrat", "mikhail_rat2", 1, result, error));
-    assert(!result.enemy_defeated && result.enemy_health == 1);
-    assert(andortrail::combat::attack_monster(resources, &core, "tobby_trainingrat",
-        "trainingrat", "mikhail_rat2", 1, result, error));
-    assert(result.enemy_defeated);
+    result.enemy_defeated = false;
+    for (int attempt = 0; attempt < 12 && !result.enemy_defeated; ++attempt) {
+        assert(andortrail::combat::attack_monster(resources, &core, "tobby_trainingrat",
+            "trainingrat", "mikhail_rat2", core.attack_damage, result, error));
+    }
+    assert(result.enemy_defeated && result.experience_gained == 3);
+    assert(core.total_experience == 7);
     assert(game_core_inventory_count(&core, "tail_trainingrat") == 2);
     assert(core.health > 0);
     assert(!andortrail::combat::attack_monster(resources, &core, "tobby_trainingrat",
@@ -341,6 +366,32 @@ int main(int argc, char **argv)
 
     GameResources resources;
     assert(game_resources_init(&resources, argv[1]));
+    std::string item_name;
+    std::string item_error;
+    assert(andortrail::items::item_name(&resources, "bread", item_name, item_error));
+    assert(item_name == "Bread");
+    std::string icon_sheet;
+    unsigned int icon_index = 0;
+    assert(andortrail::items::item_icon(
+        &resources, "club1", icon_sheet, icon_index, item_error
+    ));
+    assert(icon_sheet == "items_weapons" && icon_index == 42);
+    assert(andortrail::items::item_icon(
+        &resources, "shirt1", icon_sheet, icon_index, item_error
+    ));
+    assert(icon_sheet == "items_armours" && icon_index == 14);
+    assert(andortrail::items::item_icon(
+        &resources, "apple_green", icon_sheet, icon_index, item_error
+    ));
+    assert(icon_sheet == "items_consumables" && icon_index == 2);
+    assert(andortrail::items::item_icon(
+        &resources, "ring_mikhail", icon_sheet, icon_index, item_error
+    ));
+    assert(icon_sheet == "items_jewelry" && icon_index < 14);
+    assert(!andortrail::items::item_name(
+        &resources, "missing_item", item_name, item_error
+    ));
+    assert(!item_error.empty());
     test_original_actor_spawn_areas();
     test_original_actor_icons(&resources);
     test_home_rest_and_container(&resources);

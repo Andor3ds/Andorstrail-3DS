@@ -50,6 +50,9 @@ the NDS resource pack and actor-spawn WIP pack were secondary references only.
 The additional Crossglen Hall textures and actor sprite sheets come from the
 Android source at
 [commit `0acd31f`](https://github.com/karim14/andors-trail/tree/0acd31f090c735c5e357ce0ae4673974e92d7307/AndorsTrail).
+The Hero Info item, equipment, and blue frame graphics were cross-checked against the
+requested [AndorsTrailMods source at commit
+`2194222`](https://github.com/AndorsTrailMods/andors-trail/tree/2194222d1d9fe8163ecd5ef00d3469f88f6f5218/AndorsTrail).
 Retain the original asset credits and notices in
 [the Android About strings](https://github.com/karim14/andors-trail/blob/0acd31f090c735c5e357ce0ae4673974e92d7307/AndorsTrail/res/values/strings_about.xml);
 some bundled graphics are restricted to use as part of Andor's Trail.
@@ -67,6 +70,20 @@ his occupied map tile.
 Mikhail's Home introduction and bread/rat quests use the original conversation,
 item, monster, drop-list, map-spawn, and actor-sprite records. Quest progress,
 inventory, health, and gold are saved to `sdmc:/3ds/andorstrail-save.dat`.
+
+The lower screen uses the original Android player portrait, health/experience
+bars, toolbox, Hero Info tab names, blue frame/tab graphics, and UI/item icons.
+Rat defeats award the source-derived experience;
+the level-up choices and progression values are based on Android, and older
+saves are migrated to the current progression format. The portrait opens Hero
+Info and the toolbox exposes save and navigation entries. This UI port is still
+incomplete: Hero Info only exposes the currently implemented Andor quest,
+equipment is not yet backed by equipped-item state, and skill allocation and
+quick-item actions are not ported; the world-map view is unavailable until the
+original visited-map tiles are bundled. Inventory names and item sprites come
+from the original item records and can be scrolled. HUD and dialogue text use
+Citro2D's system-font fallback when a font handle is not available; visual
+rendering still needs confirmation on hardware.
 
 The Home map's source GIDs resolve to
 the original tileset PNGs; the top-screen camera follows the player, and D-pad

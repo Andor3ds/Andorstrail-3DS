@@ -24,7 +24,7 @@ CXXFLAGS := $(CFLAGS) -fno-rtti -fno-exceptions
 CXXFLAGS += -std=gnu++11
 ASFLAGS := -g $(ARCH)
 LDFLAGS = -specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
-LIBS := -lcitro2d -lcitro3d -lctru -ltinyxml2 -lpng -lz
+LIBS := -lcitro2d -lcitro3d -lctru -ltinyxml2 -lpng -lz -lm
 CTRULIB ?= $(DEVKITPRO)/libctru
 LIBDIRS := $(CTRULIB) $(DEVKITPRO)/portlibs/3ds
 
@@ -60,7 +60,7 @@ $(BUILD):
 
 clean:
 	@rm -rf $(BUILD) $(TARGET).elf $(TARGET).3dsx $(TARGET).smdh $(TARGET).lst $(TARGET).map
-	@rm -f $(ROMFS)/gfx/*.t3x
+	@rm -f $(ROMFS)/gfx/*.t3x $(ROMFS)/gfx/ui/*.t3x
 
 test: $(BUILD)/host-tests/test_game_json $(BUILD)/host-tests/test_game_resources $(BUILD)/host-tests/test_game_map $(BUILD)/host-tests/test_game_interactions $(BUILD)/host-tests/test_game_core
 	$(BUILD)/host-tests/test_game_json
@@ -77,7 +77,7 @@ $(BUILD)/host-tests/test_game_json: source/core/game_json.c tests/test_game_json
 	gcc -std=c11 -Wall -Wextra -Werror -Isource/core $^ -o $@
 
 $(BUILD)/host-tests/test_game_core: source/core/game_core.c tests/test_game_core.c | $(BUILD)/host-tests
-	gcc -std=c11 -Wall -Wextra -Werror -Isource/core $^ -o $@
+	gcc -std=c11 -Wall -Wextra -Werror -Isource/core $^ -lm -o $@
 
 $(BUILD)/host-tests/test_game_resources: source/core/game_json.c source/core/game_resources.c source/core/game_resource_index.c tests/test_game_resources.c | $(BUILD)/host-tests
 	gcc -std=c11 -Wall -Wextra -Werror -Isource/core $^ -lz -o $@
@@ -105,9 +105,13 @@ MAP_ROMFS_FILES := $(wildcard $(PROJECT_ROOT)/$(ROMFS)/maps/*.tmx) \
 				   $(PROJECT_ROOT)/$(ROMFS)/maps/worldmap.xml \
 				   $(PROJECT_ROOT)/$(ROMFS)/maps/maps.list
 MAP_T3X_FILES := $(patsubst $(PROJECT_ROOT)/assets/map/home/%.png,$(PROJECT_ROOT)/$(ROMFS)/gfx/%.t3x,$(wildcard $(PROJECT_ROOT)/assets/map/home/*.png))
-$(OUTPUT).3dsx: $(OUTPUT).elf $(OUTPUT).smdh $(PROJECT_ROOT)/$(ROMFS)/game_data.pack $(MAP_ROMFS_FILES) $(PROJECT_ROOT)/$(ROMFS)/gfx/tilesets.list $(MAP_T3X_FILES)
+UI_T3X_FILES := $(patsubst $(PROJECT_ROOT)/assets/ui/%.png,$(PROJECT_ROOT)/$(ROMFS)/gfx/ui/%.t3x,$(wildcard $(PROJECT_ROOT)/assets/ui/*.png))
+$(OUTPUT).3dsx: $(OUTPUT).elf $(OUTPUT).smdh $(PROJECT_ROOT)/$(ROMFS)/game_data.pack $(MAP_ROMFS_FILES) $(PROJECT_ROOT)/$(ROMFS)/gfx/tilesets.list $(MAP_T3X_FILES) $(PROJECT_ROOT)/$(ROMFS)/gfx/ui/ui.list $(UI_T3X_FILES)
 $(OUTPUT).elf: $(OFILES)
 $(PROJECT_ROOT)/$(ROMFS)/gfx/%.t3x: $(PROJECT_ROOT)/assets/map/home/%.png
+	@mkdir -p $(dir $@)
+	tex3ds -f rgba8888 -z auto -o $@ $<
+$(PROJECT_ROOT)/$(ROMFS)/gfx/ui/%.t3x: $(PROJECT_ROOT)/assets/ui/%.png
 	@mkdir -p $(dir $@)
 	tex3ds -f rgba8888 -z auto -o $@ $<
 -include $(DEPENDS)

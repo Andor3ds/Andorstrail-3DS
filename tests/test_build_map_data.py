@@ -1,15 +1,59 @@
 import tempfile
 import unittest
 import base64
+import re
 import struct
 import xml.etree.ElementTree as ET
 import zlib
 from pathlib import Path
 
-from tools.build_map_data import ACTOR_SPRITE_SHEETS, copy_map_render_assets, copy_map_data
+from tools.build_map_data import (
+    ACTOR_SPRITE_SHEETS,
+    UI_ASSETS,
+    copy_map_render_assets,
+    copy_map_data,
+    copy_ui_assets,
+)
 
 
 class MapDataBuilderTests(unittest.TestCase):
+    def test_hud_image_order_matches_bundled_ui_assets(self):
+        project = Path(__file__).resolve().parents[1]
+        source = (project / "source" / "platform" / "3ds" / "hud_view.cpp").read_text(
+            encoding="utf-8"
+        )
+        match = re.search(r"UI_IMAGE_NAMES\[\] = \{(.*?)\};", source, re.DOTALL)
+        self.assertIsNotNone(match)
+        self.assertEqual(re.findall(r'"([^"]+)"', match.group(1)), list(UI_ASSETS))
+
+    def test_bundles_original_ui_assets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "android"
+            drawable = source / "res" / "drawable"
+            drawable.mkdir(parents=True)
+            for name in UI_ASSETS:
+                (drawable / name).write_bytes(f"original-{name}".encode("ascii"))
+
+            count, byte_count = copy_ui_assets(source, root / "project")
+
+            asset_directory = root / "project" / "assets" / "ui"
+            self.assertEqual(count, len(UI_ASSETS))
+            self.assertEqual(
+                byte_count,
+                sum(len(f"original-{name}".encode("ascii")) for name in UI_ASSETS),
+            )
+            for name in UI_ASSETS:
+                self.assertEqual(
+                    (asset_directory / name).read_bytes(),
+                    f"original-{name}".encode("ascii"),
+                )
+            self.assertEqual(
+                (root / "project" / "romfs" / "gfx" / "ui" / "ui.list")
+                .read_text(encoding="ascii").splitlines(),
+                list(UI_ASSETS),
+            )
+
     def test_bundled_transition_map_images_cover_default_layer_gids(self):
         project = Path(__file__).resolve().parents[1]
         required_images = []

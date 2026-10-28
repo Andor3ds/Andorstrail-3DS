@@ -7,6 +7,8 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <memory>
+#include <new>
 #include <sstream>
 
 namespace andortrail {
@@ -98,16 +100,6 @@ bool phrase_message(GameResources *resources, const std::string &phrase_id, std:
     if (copied) message.assign(source);
     game_json_dispose(&document);
     return copied;
-}
-
-std::string requirement_description(const map::Requirement &requirement)
-{
-    std::ostringstream text;
-    text << requirement.type;
-    if (requirement.has_id) text << " " << requirement.id;
-    text << "=" << requirement.value;
-    if (requirement.negate) text << " (negated)";
-    return text.str();
 }
 
 }
@@ -483,10 +475,16 @@ void MapRenderer::show_container(const map::Event &event)
         modal_interaction_ = true;
         return;
     }
-    const GameCore previous_state = *core_;
+    const std::unique_ptr<GameCore> previous_state(new (std::nothrow) GameCore);
+    if (!previous_state) {
+        interaction_message_ = "Container state could not be allocated.";
+        modal_interaction_ = true;
+        return;
+    }
+    *previous_state = *core_;
     if (!items::apply_drop_list(resources_, core_, event.drop_list_id, interaction_message_)
             || !game_core_set_quest_progress(core_, opened_flag.c_str(), 1)) {
-        *core_ = previous_state;
+        *core_ = *previous_state;
         if (interaction_message_.empty()) {
             interaction_message_ = "Container could not be opened: " + event.name;
         }
@@ -503,11 +501,22 @@ void MapRenderer::show_key_requirement(const map::Event &event)
 {
     interaction_message_.clear();
     if (!event.phrase_id.empty()) phrase_message(resources_, event.phrase_id, interaction_message_);
-    if (!interaction_message_.empty()) interaction_message_ += "\n";
-    interaction_message_ += "Key-area requirement is preserved but not evaluated: ";
-    interaction_message_ += requirement_description(event.requirement);
-    interaction_message_ += ". Movement remains blocked until its gameplay system is ported.";
+    if (interaction_message_.empty()) {
+        interaction_message_ = "You cannot go that way yet.";
+    }
     modal_interaction_ = true;
+}
+
+static bool key_requirement_met(const map::Requirement &requirement, const GameCore *core)
+{
+    if (!requirement.valid || !requirement.recognized_type || core == NULL) return false;
+    bool met = false;
+    if (requirement.type == "questProgress" || requirement.type == "questLatestProgress") {
+        met = game_core_quest_progress(core, requirement.id.c_str()) == requirement.value;
+    } else {
+        return false;
+    }
+    return requirement.negate ? !met : met;
 }
 
 bool MapRenderer::move_player(int dx, int dy)
@@ -527,8 +536,10 @@ bool MapRenderer::move_player(int dx, int dy)
     for (const map::Event &event : translated_.events) {
         if (event.kind != map::EventKind::Key || !event.active || !contains(event.tile_rect, next)
                 || !event.has_requirement) continue;
-        show_key_requirement(event);
-        return false;
+        if (!key_requirement_met(event.requirement, core_)) {
+            show_key_requirement(event);
+            return false;
+        }
     }
 
     player_ = next;
@@ -589,9 +600,9 @@ bool MapRenderer::interact()
         modal_interaction_ = true;
         return true;
     }
-    interaction_message_ = "No one nearby to talk to.";
+    interaction_message_.clear();
     shop_interaction_ = false;
-    modal_interaction_ = true;
+    modal_interaction_ = false;
     return false;
 }
 
@@ -656,7 +667,7 @@ bool MapRenderer::attack_nearby_rat()
     instance_id << "mikhail_rat" << rat_index;
     combat::AttackResult result;
     if (!combat::attack_monster(resources_, core_, "tobby_trainingrat", "trainingrat",
-            instance_id.str(), 1, result, error)) {
+            instance_id.str(), core_->attack_damage, result, error)) {
         interaction_message_ = "Combat failed: " + error;
         modal_interaction_ = true;
         return false;
@@ -665,8 +676,11 @@ bool MapRenderer::attack_nearby_rat()
     std::ostringstream message;
     if (result.enemy_defeated) {
         message << "Training rat defeated. A training-rat tail was added to your bag.";
+    } else if (result.player_hit) {
+        message << "You hit the training rat for " << result.damage_dealt << " damage ("
+            << result.enemy_health << " HP left).";
     } else {
-        message << "You hit the training rat (" << result.enemy_health << " HP left).";
+        message << "Your attack missed the training rat.";
     }
     if (result.player_knocked_out) {
         game_core_restore_player(core_);
@@ -888,6 +902,13 @@ void MapRenderer::draw(int screen_width, int screen_height) const
 
     draw_layer("above", view, 0.5f);
     draw_layer("top", view, 0.5f);
+}
+
+void MapRenderer::draw_player_portrait(float x, float y, float depth) const
+{
+    if (player_image_.tex != NULL && player_image_.subtex != NULL) {
+        C2D_DrawImageAt(player_image_, x, y, depth, NULL);
+    }
 }
 
 map::GridPosition MapRenderer::player_position() const

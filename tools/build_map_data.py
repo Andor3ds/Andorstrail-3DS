@@ -16,6 +16,40 @@ RENDER_MAPS = ("home", "crossglen", "crossglen_hall", "wild1")
 RENDERED_LAYERS = {"base", "ground", "objects", "above", "top"}
 ANDROID_GID_FLAGS = 0xF0000000
 ACTOR_SPRITE_SHEETS = ("monsters_mage2.png", "monsters_men.png", "monsters_rats.png")
+UI_ASSETS = (
+    "ui_bar_background.9.png",
+    "ui_icon_combat.png",
+    "ui_icon_equipment.png",
+    "ui_icon_map.png",
+    "ui_icon_quest.png",
+    "ui_icon_save.png",
+    "ui_icon_skill.png",
+    "ui_quickslots.png",
+    "ui_red_foreground.9.png",
+    "ui_selections.png",
+    "ui_yellow_foreground.9.png",
+    "ui_icon_coins.png",
+    "equip_weapon.png",
+    "equip_shield.png",
+    "equip_body.png",
+    "equip_feet.png",
+    "equip_hand.png",
+    "equip_head.png",
+    "equip_neck.png",
+    "equip_ring.png",
+    "items_weapons.png",
+    "items_armours.png",
+    "items_jewelry.png",
+    "items_consumables.png",
+    "items_misc.png",
+    "ui_blue_stdframe.9.png",
+    "ui_blue_tabframe.9.png",
+    "ui_blue_tabwidget_enabled_selected.9.png",
+    "ui_blue_tabwidget_enabled_unselected.9.png",
+    "ui_blue_tabframe_topoverlay.9.png",
+    "char_hero_large.png",
+    "equip_square.png",
+)
 
 def copy_map_data(source_root: Path, project_root: Path) -> tuple[int, int]:
     xml_root = source_root / "res" / "xml"
@@ -176,6 +210,28 @@ def copy_map_render_assets(
     return len(source_names), byte_count
 
 
+def copy_ui_assets(source_root: Path, project_root: Path) -> tuple[int, int]:
+    source_directory = source_root / "res" / "drawable"
+    asset_directory = project_root / "assets" / "ui"
+    gfx_directory = project_root / "romfs" / "gfx" / "ui"
+    asset_directory.mkdir(parents=True, exist_ok=True)
+    gfx_directory.mkdir(parents=True, exist_ok=True)
+
+    byte_count = 0
+    for name in UI_ASSETS:
+        source_path = source_directory / name
+        if not source_path.is_file():
+            raise ValueError(f"original Android UI asset is missing: {source_path}")
+        target_path = asset_directory / name
+        if source_path.resolve() != target_path.resolve():
+            shutil.copyfile(source_path, target_path)
+        byte_count += target_path.stat().st_size
+    (gfx_directory / "ui.list").write_text(
+        "".join(f"{name}\n" for name in UI_ASSETS), encoding="ascii"
+    )
+    return len(UI_ASSETS), byte_count
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True, help="Android Andor's Trail project root")
@@ -198,6 +254,8 @@ def main() -> None:
         arguments.source, arguments.project, tuple(arguments.render_maps)
     )
     print(f"Bundled original map/player/actor images for {', '.join(arguments.render_maps)} ({image_count} images, {image_bytes} bytes)")
+    ui_count, ui_bytes = copy_ui_assets(arguments.source, arguments.project)
+    print(f"Bundled {ui_count} original Android UI images ({ui_bytes} bytes)")
 
 
 if __name__ == "__main__":

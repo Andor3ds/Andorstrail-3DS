@@ -24,6 +24,7 @@ public:
         GameResources *resources, GameCore *core, std::string &error);
     void dispose();
     void draw(int screen_width, int screen_height) const;
+    void draw_player_portrait(float x, float y, float depth) const;
     bool move_player(int dx, int dy);
     bool interact();
     bool can_talk_to_mikhail() const;

@@ -3,6 +3,9 @@
 #include <climits>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <memory>
+#include <new>
 #include <string>
 
 namespace andortrail {
@@ -35,6 +38,95 @@ bool read_integer(GameJsonRef value, int &destination, const char *field,
 
 }
 
+bool item_name(
+    GameResources *resources,
+    const std::string &item_id,
+    std::string &name,
+    std::string &error
+)
+{
+    error.clear();
+    name.clear();
+    if (resources == NULL || item_id.empty()) {
+        error = "invalid item-name configuration";
+        return false;
+    }
+    const GameResourceRecordEntry *record = game_resources_find(
+        GAME_RESOURCE_ITEM, item_id.c_str(), NULL
+    );
+    if (record == NULL) {
+        error = "item record not found: " + item_id;
+        return false;
+    }
+    GameJsonDocument document;
+    GameJsonRef item;
+    if (!game_resources_open_record(resources, record, &document, &item)) {
+        error = "item record could not be read: " + item_id;
+        return false;
+    }
+    char source_name[128];
+    const bool valid_name = game_json_string_copy(
+        game_json_object_get(item, "name"), source_name, sizeof(source_name)
+    );
+    if (valid_name) name.assign(source_name);
+    game_json_dispose(&document);
+    if (!valid_name) error = "item record has an invalid name: " + item_id;
+    return valid_name;
+}
+
+bool item_icon(
+    GameResources *resources,
+    const std::string &item_id,
+    std::string &sheet,
+    unsigned int &index,
+    std::string &error
+)
+{
+    error.clear();
+    sheet.clear();
+    index = 0;
+    if (resources == NULL || item_id.empty()) {
+        error = "invalid item-icon configuration";
+        return false;
+    }
+    const GameResourceRecordEntry *record = game_resources_find(
+        GAME_RESOURCE_ITEM, item_id.c_str(), NULL
+    );
+    if (record == NULL) {
+        error = "item record not found: " + item_id;
+        return false;
+    }
+    GameJsonDocument document;
+    GameJsonRef item;
+    if (!game_resources_open_record(resources, record, &document, &item)) {
+        error = "item record could not be read: " + item_id;
+        return false;
+    }
+    char icon_id[GAME_CORE_ID_CAPACITY];
+    bool valid = game_json_string_copy(
+        game_json_object_get(item, "iconID"), icon_id, sizeof(icon_id)
+    );
+    if (valid) {
+        char *separator = std::strchr(icon_id, ':');
+        if (separator == NULL || separator == icon_id || separator[1] == '\0') {
+            valid = false;
+        } else {
+            *separator = '\0';
+            char *end = NULL;
+            const unsigned long parsed = std::strtoul(separator + 1, &end, 10);
+            if (end == separator + 1 || *end != '\0' || parsed > UINT_MAX) {
+                valid = false;
+            } else {
+                sheet.assign(icon_id);
+                index = static_cast<unsigned int>(parsed);
+            }
+        }
+    }
+    game_json_dispose(&document);
+    if (!valid) error = "item record has an invalid iconID: " + item_id;
+    return valid;
+}
+
 bool apply_drop_list(
     GameResources *resources,
     GameCore *core,
@@ -61,7 +153,13 @@ bool apply_drop_list(
         return false;
     }
 
-    const GameCore previous_state = *core;
+    const std::unique_ptr<GameCore> previous_state(new (std::nothrow) GameCore);
+    if (!previous_state) {
+        game_json_dispose(&document);
+        error = "drop-list state could not be allocated";
+        return false;
+    }
+    *previous_state = *core;
     bool success = true;
     const GameJsonRef items = game_json_object_get(drop_list, "items");
     const std::size_t count = game_json_array_size(items);
@@ -118,7 +216,7 @@ bool apply_drop_list(
         success = false;
     }
     game_json_dispose(&document);
-    if (!success) *core = previous_state;
+    if (!success) *core = *previous_state;
     return success;
 }
 
@@ -143,13 +241,18 @@ bool buy_item(
     }
 
     const int total_price = unit_price * quantity;
-    const GameCore previous_state = *core;
+    const std::unique_ptr<GameCore> previous_state(new (std::nothrow) GameCore);
+    if (!previous_state) {
+        error = "purchase state could not be allocated";
+        return false;
+    }
+    *previous_state = *core;
     if (!game_core_remove_item(core, "gold", total_price)) {
         error = "not enough gold";
         return false;
     }
     if (!game_core_add_item(core, item_id.c_str(), quantity)) {
-        *core = previous_state;
+        *core = *previous_state;
         error = "purchased item could not be added to inventory";
         return false;
     }

@@ -3,6 +3,8 @@
 
 #include <climits>
 #include <cstdint>
+#include <memory>
+#include <new>
 #include <string>
 
 namespace andortrail {
@@ -70,11 +72,16 @@ bool Conversation::start(const std::string &phrase_id, std::string &error)
         return false;
     }
 
-    const GameCore previous_state = *core_;
+    const std::unique_ptr<GameCore> previous_state(new (std::nothrow) GameCore);
+    if (!previous_state) {
+        error = "conversation state could not be allocated";
+        return false;
+    }
+    *previous_state = *core_;
     std::string current_phrase = phrase_id;
     for (int route_count = 0; route_count < 16; ++route_count) {
         if (!enter_phrase(current_phrase, error)) {
-            *core_ = previous_state;
+            *core_ = *previous_state;
             close();
             return false;
         }
@@ -92,7 +99,7 @@ bool Conversation::start(const std::string &phrase_id, std::string &error)
         }
         current_phrase = replies_[0].next_phrase_id;
     }
-    *core_ = previous_state;
+    *core_ = *previous_state;
     close();
     error = "conversation exceeded automatic routing limit";
     return false;
@@ -155,11 +162,9 @@ bool Conversation::enter_phrase(const std::string &phrase_id, std::string &error
         available_replies.push_back(parsed);
     }
 
-    const GameCore previous_state = *core_;
     const bool rewards_applied = apply_rewards(phrase, error);
     game_json_dispose(&document);
     if (!rewards_applied) {
-        *core_ = previous_state;
         return false;
     }
     phrase_id_ = phrase_id;
@@ -290,17 +295,23 @@ bool Conversation::choose(std::size_t reply_index, std::string &error)
     const GameJsonRef reply = game_json_array_get(
         game_json_object_get(phrase, "replies"), selected.source_index
     );
-    const GameCore previous_state = *core_;
+    const std::unique_ptr<GameCore> previous_state(new (std::nothrow) GameCore);
+    if (!previous_state) {
+        game_json_dispose(&document);
+        error = "conversation state could not be allocated";
+        return false;
+    }
+    *previous_state = *core_;
     const bool requirements_met = reply_requirements_met(reply, true, error);
     game_json_dispose(&document);
     if (!requirements_met) {
-        *core_ = previous_state;
+        *core_ = *previous_state;
         if (error.empty()) error = "conversation reply requirements are no longer met";
         return false;
     }
 
     if (!enter_phrase(selected.next_phrase_id, error)) {
-        *core_ = previous_state;
+        *core_ = *previous_state;
         return false;
     }
     active_ = true;

@@ -12,7 +12,10 @@ namespace combat {
 struct AttackResult {
     int enemy_health;
     int enemy_max_health;
+    int damage_dealt;
     int damage_taken;
+    int experience_gained;
+    bool player_hit;
     bool enemy_defeated;
     bool player_knocked_out;
 };
