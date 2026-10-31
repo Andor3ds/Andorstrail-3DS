@@ -50,8 +50,8 @@ the NDS resource pack and actor-spawn WIP pack were secondary references only.
 The additional Crossglen Hall textures and actor sprite sheets come from the
 Android source at
 [commit `0acd31f`](https://github.com/karim14/andors-trail/tree/0acd31f090c735c5e357ce0ae4673974e92d7307/AndorsTrail).
-The Hero Info item, equipment, and blue frame graphics were cross-checked against the
-requested [AndorsTrailMods source at commit
+The Hero Info item, equipment, and blue frame graphics, along with skill catalog
+definitions, were cross-checked against the requested [AndorsTrailMods source at commit
 `2194222`](https://github.com/AndorsTrailMods/andors-trail/tree/2194222d1d9fe8163ecd5ef00d3469f88f6f5218/AndorsTrail).
 Retain the original asset credits and notices in
 [the Android About strings](https://github.com/karim14/andors-trail/blob/0acd31f090c735c5e357ce0ae4673974e92d7307/AndorsTrail/res/values/strings_about.xml);
@@ -63,7 +63,8 @@ and START to exit. Mikhail is drawn with his original sprite at his Home spawn;
 press A within two tiles to talk. Travel south to Crossglen, then enter the
 Crossglen Hall to find Mara at her original spawn and buy bread. The two
 training rats appear in Crossglen's original spawn area after Mikhail gives you
-that quest. The status overlay shows nearby talk, shop, or rat prompts. During
+that quest and wander within their spawn area on the source movement interval.
+The status overlay shows nearby talk, shop, or rat prompts. During
 dialogue, the lower screen displays the message and controls; use Up/Down to
 select a reply, A to choose it, and B to close. Mikhail blocks movement through
 his occupied map tile.
@@ -79,13 +80,19 @@ saves are migrated to the current progression format. The portrait opens Hero
 Info and the toolbox exposes save and navigation entries. This UI port is still
 incomplete: the quest log reads active, visible entries from the original quest
 records for progress values in the save, but gameplay progression is only
-implemented for the current Andor/Mikhail slice. Equipment is not yet backed by
-equipped-item state, skill allocation and quick-item actions are not ported, and
-the world-map view is unavailable until the original visited-map tiles are
-bundled. Inventory names and item sprites come from the original item records
-and can be scrolled. HUD and dialogue text use Citro2D's system-font fallback
-when a font handle is not available; visual rendering still needs confirmation
-on hardware.
+implemented for the current Andor/Mikhail slice. The Skills tab lists the
+original always-visible skill names and short descriptions; ranks, point
+spending, rank limits, and visible-skill prerequisites are implemented from
+the Android definitions. Weapon Accuracy, Hard Hit, Dodge, and Bark Skin
+affect combat using the original per-rank bonuses; Quick Learner increases
+combat experience and Corpse Eater restores health on kills. Fortitude
+restores health on level-up. Other skill effects and quest-unlocked abilities
+are not ported yet. Equipment is not yet backed by equipped-item state,
+quick-item actions are not ported, and the world-map view is unavailable until
+the original visited-map tiles are bundled. Inventory names and item sprites
+come from the original item records and can be scrolled.
+HUD and dialogue text use Citro2D's system-font fallback when a font handle is
+not available; visual rendering still needs confirmation on hardware.
 
 The Home map's source GIDs resolve to
 the original tileset PNGs; the top-screen camera follows the player, and D-pad

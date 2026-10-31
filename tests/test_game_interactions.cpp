@@ -4,10 +4,12 @@
 #include "game_core.h"
 #include "game_items.hpp"
 #include "game_quest_log.hpp"
+#include "game_skills.hpp"
 #include "game_resources.h"
 
 #include <cassert>
 #include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <iostream>
 #include <string>
@@ -330,6 +332,80 @@ static void test_original_quest_log(GameResources *resources)
     assert(entries.empty());
 }
 
+static void test_original_visible_skill_catalog()
+{
+    std::size_t count = 0;
+    const andortrail::skills::Definition *definitions =
+        andortrail::skills::visible_definitions(count);
+    assert(definitions != NULL);
+    assert(count == 32);
+    assert(std::string(definitions[0].id) == "weaponChance");
+    assert(std::string(definitions[0].name) == "Weapon Accuracy");
+    assert(std::string(definitions[0].description) == "Increased attack chance");
+    assert(std::string(definitions[count - 1].id) == "specializationWeaponShield");
+    for (std::size_t index = 0; index < count; ++index) {
+        assert(definitions[index].id[0] != '\0');
+        assert(definitions[index].name[0] != '\0');
+        assert(definitions[index].description[0] != '\0');
+    }
+
+    GameCore combat_core;
+    game_core_init(&combat_core);
+    assert(game_core_set_skill_level(&combat_core, "weaponChance", 2));
+    assert(game_core_set_skill_level(&combat_core, "weaponDmg", 3));
+    assert(game_core_set_skill_level(&combat_core, "dodge", 2));
+    assert(game_core_set_skill_level(&combat_core, "barkSkin", 4));
+    const andortrail::skills::CombatBonuses bonuses =
+        andortrail::skills::combat_bonuses(&combat_core);
+    assert(bonuses.attack_chance == 24);
+    assert(bonuses.maximum_damage == 6);
+    assert(bonuses.block_chance == 18);
+    assert(bonuses.damage_resistance == 4);
+
+    GameCore core;
+    game_core_init(&core);
+    core.skill_points = 3;
+    const andortrail::skills::Definition &weapon_chance = definitions[0];
+    assert(andortrail::skills::can_level_up(&core, weapon_chance));
+    assert(andortrail::skills::level_up(&core, weapon_chance));
+    assert(game_core_skill_level(&core, "weaponChance") == 1);
+    assert(core.skill_points == 2);
+
+    const andortrail::skills::Definition &cleave = definitions[10];
+    assert(!andortrail::skills::can_level_up(&core, cleave));
+    assert(game_core_set_skill_level(&core, "weaponDmg", 1));
+    assert(andortrail::skills::can_level_up(&core, cleave));
+    assert(andortrail::skills::level_up(&core, cleave));
+    assert(game_core_skill_level(&core, "cleave") == 1);
+    assert(!andortrail::skills::can_level_up(&core, cleave));
+    assert(core.skill_points == 1);
+
+    const andortrail::skills::Definition &speed = definitions[7];
+    core.level = 14;
+    assert(!andortrail::skills::can_level_up(&core, speed));
+    core.level = 15;
+    assert(andortrail::skills::can_level_up(&core, speed));
+    assert(andortrail::skills::level_up(&core, speed));
+    assert(game_core_skill_level(&core, "speed") == 1);
+    assert(core.skill_points == 0);
+    assert(!andortrail::skills::can_level_up(&core, speed));
+
+    core.skill_points = 1;
+    assert(game_core_set_skill_level(&core, "speed", 2));
+    assert(!andortrail::skills::can_level_up(&core, speed));
+    assert(core.skill_points == 1);
+
+    const andortrail::skills::Definition &bark_skin = definitions[4];
+    core.level = 9;
+    core.block_chance = 15;
+    assert(!andortrail::skills::can_level_up(&core, bark_skin));
+    core.level = 10;
+    assert(andortrail::skills::can_level_up(&core, bark_skin));
+    assert(andortrail::skills::level_up(&core, bark_skin));
+    assert(game_core_skill_level(&core, "barkSkin") == 1);
+    assert(core.skill_points == 0);
+}
+
 static void test_training_rat_combat(GameResources *resources, const char *save_path)
 {
     assert(save_path != NULL);
@@ -389,6 +465,66 @@ static void test_training_rat_combat(GameResources *resources, const char *save_
     assert(std::remove(save_path) == 0);
 }
 
+static void test_training_rat_skill_damage(GameResources *resources)
+{
+    GameCore core;
+    game_core_init(&core);
+    core.attack_chance = 1000;
+    assert(game_core_set_skill_level(&core, "weaponDmg", 3));
+
+    bool seed_found = false;
+    for (uint32_t seed = 1; seed < 10000; ++seed) {
+        GameCore probe;
+        game_core_init(&probe);
+        probe.random_state = seed;
+        if (game_core_random(&probe, 100) >= 90) continue;
+        if (game_core_random(&probe, 7) == 0) continue;
+        core.random_state = seed;
+        seed_found = true;
+        break;
+    }
+    assert(seed_found);
+
+    andortrail::combat::AttackResult result;
+    std::string error;
+    assert(andortrail::combat::attack_monster(resources, &core, "tobby_trainingrat",
+        "trainingrat", "skill_effect_rat", 1, result, error));
+    assert(result.player_hit);
+    assert(result.damage_dealt > 1 && result.damage_dealt <= 7);
+}
+
+static void test_training_rat_reward_skills(GameResources *resources)
+{
+    GameCore core;
+    game_core_init(&core);
+    core.attack_chance = INT_MAX;
+    core.max_health = 30;
+    core.health = 26;
+    assert(game_core_set_skill_level(&core, "moreExp", 10));
+    assert(game_core_set_skill_level(&core, "eater", 3));
+
+    bool seed_found = false;
+    for (uint32_t seed = 1; seed < 10000; ++seed) {
+        GameCore probe;
+        game_core_init(&probe);
+        probe.random_state = seed;
+        if (game_core_random(&probe, 100) >= 99) continue;
+        core.random_state = seed;
+        seed_found = true;
+        break;
+    }
+    assert(seed_found);
+
+    andortrail::combat::AttackResult result;
+    std::string error;
+    assert(andortrail::combat::attack_monster(resources, &core, "tobby_trainingrat",
+        "trainingrat", "skill_reward_rat", 100, result, error));
+    assert(result.enemy_defeated && result.player_hit);
+    assert(result.experience_gained == 6);
+    assert(core.total_experience == 7);
+    assert(result.health_restored == 3 && core.health == 29);
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 3);
@@ -428,6 +564,9 @@ int main(int argc, char **argv)
     test_original_sign_phrase(&resources);
     test_mikhail_quests(&resources);
     test_original_quest_log(&resources);
+    test_original_visible_skill_catalog();
+    test_training_rat_skill_damage(&resources);
+    test_training_rat_reward_skills(&resources);
     test_training_rat_combat(&resources, argv[2]);
     game_resources_dispose(&resources);
     std::cout << "game interaction data tests passed\n";

@@ -15,6 +15,7 @@ struct AttackResult {
     int damage_dealt;
     int damage_taken;
     int experience_gained;
+    int health_restored;
     bool player_hit;
     bool enemy_defeated;
     bool player_knocked_out;

@@ -66,6 +66,12 @@ int main(int argc, char **argv)
     assert(player.x == original_player.x && player.y == original_player.y);
     assert(andortrail::map::move_player(home, player, 1, 0));
     assert(player.x == 2 && player.y == 4);
+    const GridPosition diagonal_step =
+        andortrail::map::step_toward({4, 3}, {2, 7});
+    assert(diagonal_step.x == 3 && diagonal_step.y == 4);
+    const GridPosition destination_step =
+        andortrail::map::step_toward({2, 4}, {2, 4});
+    assert(destination_step.x == 2 && destination_step.y == 4);
     for (int step = 0; step < 6; ++step) {
         assert(andortrail::map::move_player(home, player, 1, 0));
     }

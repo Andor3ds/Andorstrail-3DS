@@ -3,6 +3,7 @@
 
 #include "game_core.h"
 #include "game_quest_log.hpp"
+#include "game_skills.hpp"
 #include "map_renderer.hpp"
 
 #include <3ds.h>
@@ -116,6 +117,7 @@ private:
     int selected_level_up_;
     int inventory_scroll_;
     mutable int quest_scroll_;
+    int skill_scroll_;
     bool toolbox_open_;
     std::string combat_message_;
     std::string notice_;

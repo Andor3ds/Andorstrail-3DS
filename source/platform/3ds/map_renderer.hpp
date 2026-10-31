@@ -7,6 +7,7 @@
 
 #include <citro2d.h>
 
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -25,6 +26,7 @@ public:
     void dispose();
     void draw(int screen_width, int screen_height) const;
     void draw_player_portrait(float x, float y, float depth) const;
+    void update(std::uint64_t current_time_ms);
     bool move_player(int dx, int dy);
     bool interact();
     bool can_talk_to_mikhail() const;
@@ -47,6 +49,14 @@ public:
     const char *map_id() const;
 
 private:
+    struct EnemyState {
+        int spawn_index;
+        map::GridPosition position;
+        map::GridPosition destination;
+        bool has_destination;
+        std::uint64_t next_action_time_ms;
+    };
+
     bool load_tileset_sheets(const char *tileset_list_path,
         const char *texture_directory, std::string &error);
     bool load_map(const std::string &map_id, const std::string &place_id,
@@ -60,6 +70,9 @@ private:
     void show_sign(const map::Event &event);
     void show_container(const map::Event &event);
     void show_key_requirement(const map::Event &event);
+    void initialize_enemies();
+    void update_enemies(std::uint64_t current_time_ms);
+    bool enemy_at(map::GridPosition position) const;
     void draw_layer(const std::string &name, const map::ViewTransform &view,
         float depth) const;
     void draw_gid(std::uint32_t gid, int screen_x, int screen_y, float depth) const;
@@ -83,6 +96,7 @@ private:
     bool modal_interaction_;
     bool shop_interaction_;
     bool initialized_;
+    std::vector<EnemyState> enemies_;
 };
 
 }

@@ -113,6 +113,18 @@ bool game_core_set_quest_progress(GameCore *core, const char *id, int progress)
     return set_value(core->quests, &core->quest_count, id, progress);
 }
 
+int game_core_skill_level(const GameCore *core, const char *id)
+{
+    if (core == NULL || !valid_id(id)) return 0;
+    return get_value(core->skills, core->skill_count, id);
+}
+
+bool game_core_set_skill_level(GameCore *core, const char *id, int level)
+{
+    if (core == NULL) return false;
+    return set_value(core->skills, &core->skill_count, id, level);
+}
+
 int game_core_inventory_count(const GameCore *core, const char *id)
 {
     if (core == NULL || !valid_id(id)) return 0;
@@ -236,6 +248,13 @@ bool game_core_level_up(GameCore *core, GameCoreLevelUpChoice choice)
     }
 
     ++core->level;
+    if (core->skill_count <= GAME_CORE_MAX_VALUES) {
+        const int fortitude_level = game_core_skill_level(core, "fortitude");
+        const int health_to_restore = core->max_health - core->health;
+        const int fortitude_health = fortitude_level < health_to_restore
+            ? fortitude_level : health_to_restore;
+        if (fortitude_health > 0) core->health += fortitude_health;
+    }
     if (awards_skill_point) ++core->skill_points;
     return true;
 }
@@ -262,7 +281,8 @@ bool game_core_save(const GameCore *core, const char *path)
             || core->attack_damage < 1 || core->block_chance < 0 || core->skill_points < 0
             || core->random_state == 0
             || core->quest_count > GAME_CORE_MAX_VALUES
-            || core->inventory_count > GAME_CORE_MAX_VALUES) return false;
+            || core->inventory_count > GAME_CORE_MAX_VALUES
+            || core->skill_count > GAME_CORE_MAX_VALUES) return false;
     const size_t path_length = strlen(path);
     if (path_length > SIZE_MAX - sizeof(".tmp")) return false;
     char *temporary_path = malloc(path_length + sizeof(".tmp"));
@@ -276,7 +296,7 @@ bool game_core_save(const GameCore *core, const char *path)
         return false;
     }
     bool valid = fprintf(file,
-        "ANDORTRAIL_SAVE 3\ngold %d\nhealth %d\nmax_health %d\nlevel %d\n"
+        "ANDORTRAIL_SAVE 4\ngold %d\nhealth %d\nmax_health %d\nlevel %d\n"
         "experience %d\nattack_chance %d\nattack_damage %d\nblock_chance %d\n"
         "skill_points %d\nrandom %" PRIu32 "\n",
         core->gold, core->health, core->max_health, core->level, core->total_experience,
@@ -291,6 +311,11 @@ bool game_core_save(const GameCore *core, const char *path)
         valid = valid_id(core->inventory[index].id) && core->inventory[index].value > 0
             && fprintf(file, "item %s %d\n", core->inventory[index].id,
                 core->inventory[index].value) >= 0;
+    }
+    for (size_t index = 0; valid && index < core->skill_count; ++index) {
+        valid = valid_id(core->skills[index].id) && core->skills[index].value > 0
+            && fprintf(file, "skill %s %d\n", core->skills[index].id,
+                core->skills[index].value) >= 0;
     }
     if (fclose(file) != 0) valid = false;
     if (valid && rename(temporary_path, path) != 0) valid = false;
@@ -316,6 +341,8 @@ GameCoreLoadResult game_core_load(GameCore *core, const char *path)
         version = 2;
     } else if (valid && strcmp(line, "ANDORTRAIL_SAVE 3\n") == 0) {
         version = 3;
+    } else if (valid && strcmp(line, "ANDORTRAIL_SAVE 4\n") == 0) {
+        version = 4;
     } else {
         valid = false;
     }
@@ -349,7 +376,7 @@ GameCoreLoadResult game_core_load(GameCore *core, const char *path)
                 && line_finished(line, parsed_length)) {
             if (version < 2 || health_seen || value < 0
                     || (version == 2 && value > 10)
-                    || (version == 3 && value < 0)) {
+                    || (version >= 3 && value < 0)) {
                 valid = false;
             } else {
                 loaded.health = value;
@@ -357,49 +384,49 @@ GameCoreLoadResult game_core_load(GameCore *core, const char *path)
             }
         } else if (sscanf(line, "max_health %d%n", &value, &parsed_length) == 1
                 && line_finished(line, parsed_length)) {
-            if (version != 3 || max_health_seen || value < GAME_CORE_MAX_HEALTH) valid = false;
+            if (version < 3 || max_health_seen || value < GAME_CORE_MAX_HEALTH) valid = false;
             else {
                 loaded.max_health = value;
                 max_health_seen = true;
             }
         } else if (sscanf(line, "level %d%n", &value, &parsed_length) == 1
                 && line_finished(line, parsed_length)) {
-            if (version != 3 || level_seen || value < 1 || value > GAME_CORE_MAX_LEVEL) valid = false;
+            if (version < 3 || level_seen || value < 1 || value > GAME_CORE_MAX_LEVEL) valid = false;
             else {
                 loaded.level = value;
                 level_seen = true;
             }
         } else if (sscanf(line, "experience %d%n", &value, &parsed_length) == 1
                 && line_finished(line, parsed_length)) {
-            if (version != 3 || experience_seen || value < 1) valid = false;
+            if (version < 3 || experience_seen || value < 1) valid = false;
             else {
                 loaded.total_experience = value;
                 experience_seen = true;
             }
         } else if (sscanf(line, "attack_chance %d%n", &value, &parsed_length) == 1
                 && line_finished(line, parsed_length)) {
-            if (version != 3 || attack_chance_seen || value < 0) valid = false;
+            if (version < 3 || attack_chance_seen || value < 0) valid = false;
             else {
                 loaded.attack_chance = value;
                 attack_chance_seen = true;
             }
         } else if (sscanf(line, "attack_damage %d%n", &value, &parsed_length) == 1
                 && line_finished(line, parsed_length)) {
-            if (version != 3 || attack_damage_seen || value < 1) valid = false;
+            if (version < 3 || attack_damage_seen || value < 1) valid = false;
             else {
                 loaded.attack_damage = value;
                 attack_damage_seen = true;
             }
         } else if (sscanf(line, "block_chance %d%n", &value, &parsed_length) == 1
                 && line_finished(line, parsed_length)) {
-            if (version != 3 || block_chance_seen || value < 0) valid = false;
+            if (version < 3 || block_chance_seen || value < 0) valid = false;
             else {
                 loaded.block_chance = value;
                 block_chance_seen = true;
             }
         } else if (sscanf(line, "skill_points %d%n", &value, &parsed_length) == 1
                 && line_finished(line, parsed_length)) {
-            if (version != 3 || skill_points_seen || value < 0) valid = false;
+            if (version < 3 || skill_points_seen || value < 0) valid = false;
             else {
                 loaded.skill_points = value;
                 skill_points_seen = true;
@@ -418,6 +445,11 @@ GameCoreLoadResult game_core_load(GameCore *core, const char *path)
                 && strcmp(id, "gold") != 0 && value > 0) {
             if (find_value(loaded.inventory, loaded.inventory_count, id) != NULL
                     || !set_value(loaded.inventory, &loaded.inventory_count, id, value)) valid = false;
+        } else if (sscanf(line, "skill %63s %d%n", id, &value, &parsed_length) == 2
+                && line_finished(line, parsed_length) && valid_id(id) && value > 0) {
+            if (version != 4
+                    || find_value(loaded.skills, loaded.skill_count, id) != NULL
+                    || !set_value(loaded.skills, &loaded.skill_count, id, value)) valid = false;
         } else {
             valid = false;
         }

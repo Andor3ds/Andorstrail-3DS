@@ -37,6 +37,8 @@ typedef struct {
     size_t quest_count;
     GameCoreValue inventory[GAME_CORE_MAX_VALUES];
     size_t inventory_count;
+    GameCoreValue skills[GAME_CORE_MAX_VALUES];
+    size_t skill_count;
 } GameCore;
 
 typedef enum {
@@ -54,6 +56,8 @@ void game_core_update(GameCore *core);
 void game_core_shutdown(GameCore *core);
 int game_core_quest_progress(const GameCore *core, const char *id);
 bool game_core_set_quest_progress(GameCore *core, const char *id, int progress);
+int game_core_skill_level(const GameCore *core, const char *id);
+bool game_core_set_skill_level(GameCore *core, const char *id, int level);
 int game_core_inventory_count(const GameCore *core, const char *id);
 bool game_core_add_item(GameCore *core, const char *id, int quantity);
 bool game_core_remove_item(GameCore *core, const char *id, int quantity);

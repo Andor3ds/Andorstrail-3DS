@@ -93,6 +93,7 @@ int main(void)
         const u32 keys_down = hidKeysDownRepeat();
         if (keys_down & KEY_START) break;
         if (renderer_ready) {
+            renderer.update(osGetTime());
             hud.set_combat_message(renderer.interaction_message());
             andortrail::platform3ds::HudAction hud_action =
                 andortrail::platform3ds::HUD_ACTION_NONE;
@@ -108,7 +109,7 @@ int main(void)
                     hud.set_notice("Save failed.");
                 } else {
                     hud.set_notice(hud_action == andortrail::platform3ds::HUD_ACTION_SAVE
-                        ? "Game saved." : "Level-up saved.");
+                        ? "Game saved." : "Game progress saved.");
                 }
             }
 

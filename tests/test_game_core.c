@@ -21,6 +21,25 @@ static void write_version_two_save(const char *path)
     assert(fclose(file) == 0);
 }
 
+static void write_version_three_save(const char *path)
+{
+    FILE *file = fopen(path, "wb");
+    assert(file != NULL);
+    assert(fputs("ANDORTRAIL_SAVE 3\ngold 9\nhealth 25\nmax_health 25\nlevel 1\n"
+        "experience 1\nattack_chance 60\nattack_damage 1\nblock_chance 0\n"
+        "skill_points 0\nrandom 2654435769\n", file) >= 0);
+    assert(fclose(file) == 0);
+}
+
+static void write_duplicate_skill_save(const char *path)
+{
+    FILE *file = fopen(path, "wb");
+    assert(file != NULL);
+    assert(fputs("ANDORTRAIL_SAVE 4\nskill weaponChance 1\n"
+        "skill weaponChance 2\n", file) >= 0);
+    assert(fclose(file) == 0);
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
@@ -66,9 +85,27 @@ int main(int argc, char **argv)
     assert(game_core_level_up(&core, GAME_CORE_LEVEL_UP_ATTACK_DAMAGE));
     assert(core.level == 5 && core.attack_damage == 2);
 
+    GameCore fortitude_core;
+    game_core_init(&fortitude_core);
+    fortitude_core.total_experience += game_core_experience_for_next_level(1);
+    fortitude_core.health = 10;
+    assert(game_core_set_skill_level(&fortitude_core, "fortitude", 3));
+    assert(game_core_level_up(&fortitude_core, GAME_CORE_LEVEL_UP_ATTACK_CHANCE));
+    assert(fortitude_core.level == 2);
+    assert(fortitude_core.health == 13 && fortitude_core.max_health == 25);
+
+    fortitude_core.total_experience += game_core_experience_for_next_level(2);
+    fortitude_core.health = fortitude_core.max_health - 1;
+    assert(game_core_level_up(&fortitude_core, GAME_CORE_LEVEL_UP_ATTACK_CHANCE));
+    assert(fortitude_core.health == fortitude_core.max_health);
+
     assert(game_core_load(&core, save_path) == GAME_CORE_LOAD_NOT_FOUND);
     assert(game_core_set_quest_progress(&core, "mikhail_bread", 10));
     assert(game_core_quest_progress(&core, "mikhail_bread") == 10);
+    assert(game_core_set_skill_level(&core, "weaponChance", 2));
+    assert(game_core_skill_level(&core, "weaponChance") == 2);
+    assert(!game_core_set_skill_level(&core, "invalid id", 1));
+    assert(!game_core_set_skill_level(&core, "weaponChance", -1));
     assert(game_core_add_item(&core, "bread", 2));
     assert(game_core_add_item(&core, "bread", 1));
     assert(game_core_inventory_count(&core, "bread") == 3);
@@ -95,6 +132,7 @@ int main(int argc, char **argv)
     assert(core.attack_damage == 2 && core.block_chance == 3 && core.skill_points == 1);
     assert(core.random_state != 0);
     assert(game_core_quest_progress(&core, "mikhail_bread") == 10);
+    assert(game_core_skill_level(&core, "weaponChance") == 2);
     assert(game_core_inventory_count(&core, "bread") == 2);
     assert(game_core_random(&core, 1000) == random_after_load);
 
@@ -108,6 +146,17 @@ int main(int argc, char **argv)
     assert(game_core_load(&core, invalid_path) == GAME_CORE_LOAD_OK);
     assert(core.gold == 7 && core.health == 8 && core.max_health == 25);
     assert(core.level == 1 && core.total_experience == 1);
+    assert(game_core_skill_level(&core, "weaponChance") == 0);
+
+    write_version_three_save(invalid_path);
+    assert(game_core_load(&core, invalid_path) == GAME_CORE_LOAD_OK);
+    assert(core.gold == 9 && core.skill_points == 0);
+    assert(game_core_skill_level(&core, "weaponChance") == 0);
+
+    write_duplicate_skill_save(invalid_path);
+    assert(game_core_load(&core, invalid_path) == GAME_CORE_LOAD_ERROR);
+    assert(core.gold == 9);
+    assert(game_core_skill_level(&core, "weaponChance") == 0);
 
     assert(game_core_damage_player(&core, GAME_CORE_MAX_HEALTH));
     assert(core.health == 0);

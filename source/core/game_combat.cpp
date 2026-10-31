@@ -1,6 +1,7 @@
 #include "game_combat.hpp"
 
 #include "game_items.hpp"
+#include "game_skills.hpp"
 
 #include <cmath>
 #include <climits>
@@ -95,6 +96,23 @@ int rolled_damage(GameCore *core, int minimum, int maximum)
     return minimum + static_cast<int>(game_core_random(core, range));
 }
 
+int add_bonus(int value, int bonus)
+{
+    const int64_t result = static_cast<int64_t>(value) + bonus;
+    return result > INT_MAX ? INT_MAX : static_cast<int>(result);
+}
+
+bool experience_with_skill_bonus(int base_experience, int skill_level, int &experience)
+{
+    const int64_t percent = static_cast<int64_t>(skill_level) * 10;
+    const int64_t bonus = static_cast<int64_t>(base_experience / 100) * percent
+        + static_cast<int64_t>(base_experience % 100) * percent / 100;
+    const int64_t total = static_cast<int64_t>(base_experience) + bonus;
+    if (total > INT_MAX) return false;
+    experience = static_cast<int>(total);
+    return true;
+}
+
 }
 
 bool attack_monster(
@@ -176,11 +194,15 @@ bool attack_monster(
         return false;
     }
     *previous_state = *core;
+    const skills::CombatBonuses skill_bonuses = skills::combat_bonuses(core);
     const bool player_hit = game_core_random(core, 100)
-        < static_cast<std::uint32_t>(attack_hit_chance(core->attack_chance, block_chance));
+        < static_cast<std::uint32_t>(attack_hit_chance(
+            add_bonus(core->attack_chance, skill_bonuses.attack_chance), block_chance));
     int damage_dealt = 0;
     if (player_hit) {
-        damage_dealt = player_damage - damage_resistance;
+        const int rolled_player_damage = rolled_damage(core, player_damage,
+            add_bonus(player_damage, skill_bonuses.maximum_damage));
+        damage_dealt = rolled_player_damage - damage_resistance;
         if (damage_dealt < 0) damage_dealt = 0;
         enemy_health = damage_dealt >= enemy_health ? 0 : enemy_health - damage_dealt;
     }
@@ -195,25 +217,45 @@ bool attack_monster(
     result.damage_dealt = damage_dealt;
     result.damage_taken = 0;
     result.experience_gained = 0;
+    result.health_restored = 0;
     result.player_hit = player_hit;
     result.enemy_defeated = enemy_health == 0;
     result.player_knocked_out = false;
     if (result.enemy_defeated) {
+        int experience_reward = experience;
+        const int more_experience_level = core->skill_count <= GAME_CORE_MAX_VALUES
+            ? game_core_skill_level(core, "moreExp") : 0;
         if (!game_core_set_quest_progress(core, defeated_id.c_str(), 1)
                 || !items::apply_drop_list(resources, core, drop_list_id, error)
-                || !game_core_add_experience(core, experience)) {
+                || !experience_with_skill_bonus(experience, more_experience_level,
+                    experience_reward)
+                || !game_core_add_experience(core, experience_reward)) {
             *core = *previous_state;
-            if (error.empty()) error = "monster defeat could not be recorded: " + instance_id;
+            if (error.empty()) {
+                error = "monster defeat could not be recorded: " + instance_id;
+            }
             return false;
         }
-        result.experience_gained = experience;
+        result.experience_gained = experience_reward;
+        const int eater_level = core->skill_count <= GAME_CORE_MAX_VALUES
+            ? game_core_skill_level(core, "eater") : 0;
+        const int64_t health_available = static_cast<int64_t>(core->max_health)
+            - core->health;
+        if (eater_level > 0 && health_available > 0) {
+            result.health_restored = static_cast<int>(
+                health_available < eater_level ? health_available : eater_level);
+            core->health += result.health_restored;
+        }
         return true;
     }
 
     const bool enemy_hits = game_core_random(core, 100)
-        < static_cast<std::uint32_t>(attack_hit_chance(attack_chance, core->block_chance));
+        < static_cast<std::uint32_t>(attack_hit_chance(
+            attack_chance, add_bonus(core->block_chance, skill_bonuses.block_chance)));
     if (!enemy_hits) return true;
-    const int damage_taken = rolled_damage(core, damage_minimum, damage_maximum);
+    const int rolled_enemy_damage = rolled_damage(core, damage_minimum, damage_maximum);
+    const int damage_taken = rolled_enemy_damage > skill_bonuses.damage_resistance
+        ? rolled_enemy_damage - skill_bonuses.damage_resistance : 0;
     if (damage_taken > 0 && !game_core_damage_player(core, damage_taken)) {
         *core = *previous_state;
         error = "player damage could not be applied";

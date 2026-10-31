@@ -136,6 +136,7 @@ void MapRenderer::dispose()
     player_image_ = {NULL, NULL};
     modal_interaction_ = false;
     shop_interaction_ = false;
+    enemies_.clear();
     initialized_ = false;
 }
 
@@ -244,7 +245,98 @@ bool MapRenderer::load_map(
     document_ = std::move(next_document);
     translated_ = std::move(next_translated);
     player_ = entry_position;
+    initialize_enemies();
     return true;
+}
+
+void MapRenderer::initialize_enemies()
+{
+    enemies_.clear();
+    if (core_ == NULL || document_.name != "crossglen"
+            || game_core_quest_progress(core_, "mikhail_rats") != 10) return;
+    for (int index = 0; index < 2; ++index) {
+        const std::string defeated_flag = rat_state_id(index + 1, "defeated");
+        if (game_core_quest_progress(core_, defeated_flag.c_str()) > 0) continue;
+        map::GridPosition position;
+        if (!spawn_position(document_, translated_, "trainingrat", index, position)) continue;
+        enemies_.push_back({index, position, position, false, 0});
+    }
+}
+
+bool MapRenderer::enemy_at(map::GridPosition position) const
+{
+    for (const EnemyState &enemy : enemies_) {
+        if (enemy.position.x == position.x && enemy.position.y == position.y) return true;
+    }
+    return false;
+}
+
+void MapRenderer::update(std::uint64_t current_time_ms)
+{
+    if (!initialized_ || modal_interaction_) return;
+    update_enemies(current_time_ms);
+}
+
+void MapRenderer::update_enemies(std::uint64_t current_time_ms)
+{
+    const map::SpawnArea *area = find_spawn_area(translated_, "trainingrat");
+    if (area == NULL || core_ == NULL) return;
+    const std::uint64_t movement_interval_ms = 1200;
+
+    for (std::size_t index = 0; index < enemies_.size(); ++index) {
+        EnemyState &enemy = enemies_[index];
+        if (current_time_ms < enemy.next_action_time_ms) continue;
+        enemy.next_action_time_ms = current_time_ms + movement_interval_ms;
+
+        if (enemy.has_destination
+                && enemy.position.x == enemy.destination.x
+                && enemy.position.y == enemy.destination.y) {
+            enemy.has_destination = false;
+            enemy.next_action_time_ms = current_time_ms + movement_interval_ms
+                * (1 + game_core_random(core_, 5));
+            continue;
+        }
+
+        if (!enemy.has_destination) {
+            enemy.destination = enemy.position;
+            if (game_core_random(core_, 2) == 0) {
+                enemy.destination.x = area->tile_rect.x
+                    + static_cast<int>(game_core_random(core_, area->tile_rect.width));
+            } else {
+                enemy.destination.y = area->tile_rect.y
+                    + static_cast<int>(game_core_random(core_, area->tile_rect.height));
+            }
+            enemy.has_destination = true;
+        }
+
+        const map::GridPosition next = map::step_toward(
+            enemy.position, enemy.destination);
+        bool can_move = map::is_walkable(document_, next.x, next.y)
+            && !(next.x == player_.x && next.y == player_.y);
+        for (std::size_t other = 0; can_move && other < enemies_.size(); ++other) {
+            if (other != index && enemies_[other].position.x == next.x
+                    && enemies_[other].position.y == next.y) can_move = false;
+        }
+        if (can_move && !area->ignore_areas) {
+            for (const map::Event &event : translated_.events) {
+                if (!event.active || !(event.kind == map::EventKind::MapChange
+                        || event.kind == map::EventKind::Key
+                        || event.kind == map::EventKind::Rest)) continue;
+                if (contains(event.tile_rect, next)) {
+                    can_move = false;
+                    break;
+                }
+            }
+        }
+
+        if (can_move) {
+            enemy.position = next;
+        } else {
+            enemy.has_destination = false;
+            enemy.next_action_time_ms = current_time_ms + movement_interval_ms
+                * (1 + game_core_random(core_, 5));
+        }
+    }
 }
 
 bool MapRenderer::load_tileset_sheets(
@@ -419,6 +511,7 @@ bool MapRenderer::transition(const map::Event &event, map::GridPosition entered,
     document_ = std::move(destination_document);
     translated_ = std::move(destination_translated);
     player_ = resolved.destination;
+    initialize_enemies();
     interaction_message_.clear();
     modal_interaction_ = false;
     error.clear();
@@ -532,6 +625,7 @@ bool MapRenderer::move_player(int dx, int dy)
             && next.x == actor_position.x && next.y == actor_position.y) {
         return false;
     }
+    if (enemy_at(next)) return false;
 
     for (const map::Event &event : translated_.events) {
         if (event.kind != map::EventKind::Key || !event.active || !contains(event.tile_rect, next)
@@ -629,12 +723,8 @@ const char *MapRenderer::nearby_interaction_hint() const
     if (can_shop_with_mara()) return "MARA'S SHOP - A: BUY";
     if (document_.name == "crossglen"
             && game_core_quest_progress(core_, "mikhail_rats") == 10) {
-        for (int index = 0; index < 2; ++index) {
-            const std::string defeated_flag = rat_state_id(index + 1, "defeated");
-            map::GridPosition rat;
-            if (game_core_quest_progress(core_, defeated_flag.c_str()) == 0
-                    && spawn_position(document_, translated_, "trainingrat", index, rat)
-                    && distance_to_tile(player_, rat) <= 1) {
+        for (const EnemyState &enemy : enemies_) {
+            if (distance_to_tile(player_, enemy.position) <= 1) {
                 return "TRAINING RAT NEARBY - X: ATTACK";
             }
         }
@@ -647,22 +737,18 @@ bool MapRenderer::attack_nearby_rat()
     if (!initialized_ || modal_interaction_ || document_.name != "crossglen"
             || game_core_quest_progress(core_, "mikhail_rats") != 10) return false;
 
-    int target_index = 0;
-    for (; target_index < 2; ++target_index) {
-        const std::string defeated_flag = rat_state_id(target_index + 1, "defeated");
-        if (game_core_quest_progress(core_, defeated_flag.c_str()) > 0) continue;
-        map::GridPosition target;
-        if (spawn_position(document_, translated_, "trainingrat", target_index, target)
-                && distance_to_tile(player_, target) <= 1) break;
+    std::size_t target_index = 0;
+    for (; target_index < enemies_.size(); ++target_index) {
+        if (distance_to_tile(player_, enemies_[target_index].position) <= 1) break;
     }
-    if (target_index == 2) {
+    if (target_index == enemies_.size()) {
         interaction_message_ = "No training rat is close enough to attack.";
         modal_interaction_ = true;
         return false;
     }
 
     std::string error;
-    const int rat_index = target_index + 1;
+    const int rat_index = enemies_[target_index].spawn_index + 1;
     std::ostringstream instance_id;
     instance_id << "mikhail_rat" << rat_index;
     combat::AttackResult result;
@@ -672,10 +758,17 @@ bool MapRenderer::attack_nearby_rat()
         modal_interaction_ = true;
         return false;
     }
+    if (result.enemy_defeated) {
+        enemies_.erase(enemies_.begin() + target_index);
+    }
 
     std::ostringstream message;
     if (result.enemy_defeated) {
-        message << "Training rat defeated. A training-rat tail was added to your bag.";
+        message << "Training rat defeated. A training-rat tail was added to your bag."
+            << "\nExperience gained: " << result.experience_gained << ".";
+        if (result.health_restored > 0) {
+            message << "\nCorpse Eater restored " << result.health_restored << " HP.";
+        }
     } else if (result.player_hit) {
         message << "You hit the training rat for " << result.damage_dealt << " damage ("
             << result.enemy_health << " HP left).";
@@ -883,15 +976,8 @@ void MapRenderer::draw(int screen_width, int screen_height) const
             draw_actor_icon("monsters_men.png", 7, mara, view, 0.45f);
         }
     } else if (document_.name == "crossglen") {
-        if (core_ != NULL && game_core_quest_progress(core_, "mikhail_rats") == 10) {
-            for (int index = 0; index < 2; ++index) {
-                const std::string defeated_flag = rat_state_id(index + 1, "defeated");
-                map::GridPosition rat;
-                if (game_core_quest_progress(core_, defeated_flag.c_str()) == 0
-                        && spawn_position(document_, translated_, "trainingrat", index, rat)) {
-                    draw_actor_icon("monsters_rats.png", 0, rat, view, 0.45f);
-                }
-            }
+        for (const EnemyState &enemy : enemies_) {
+            draw_actor_icon("monsters_rats.png", 0, enemy.position, view, 0.45f);
         }
     }
     map::GridPosition player_screen;

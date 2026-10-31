@@ -114,7 +114,7 @@ Tex3DS_SubTexture crop_subtexture(const Tex3DS_SubTexture &source,
 HudView::HudView()
     : core_(NULL), renderer_(NULL), font_(NULL), text_buffer_(NULL),
       resources_(NULL), screen_(SCREEN_STATUS), hero_tab_(0), selected_level_up_(0),
-      inventory_scroll_(0), quest_scroll_(0), toolbox_open_(false),
+      inventory_scroll_(0), quest_scroll_(0), skill_scroll_(0), toolbox_open_(false),
       quest_log_dirty_(true)
 {
     std::memset(sheets_, 0, sizeof(sheets_));
@@ -177,6 +177,7 @@ void HudView::dispose()
     selected_level_up_ = 0;
     inventory_scroll_ = 0;
     quest_scroll_ = 0;
+    skill_scroll_ = 0;
     toolbox_open_ = false;
     quest_log_dirty_ = true;
     quest_snapshot_.clear();
@@ -303,6 +304,25 @@ bool HudView::handle_keys(u32 keys_down, HudAction &action)
                 const int maximum_scroll = quest_entries_.empty()
                     ? 0 : static_cast<int>(quest_entries_.size() - 1);
                 quest_scroll_ = std::min(maximum_scroll, quest_scroll_ + 1);
+            }
+        } else if (hero_tab_ == 2) {
+            std::size_t skill_count = 0;
+            const skills::Definition *definitions =
+                skills::visible_definitions(skill_count);
+            const int maximum_scroll = skill_count > 3
+                ? static_cast<int>(skill_count - 3) : 0;
+            if (keys_down & KEY_UP) skill_scroll_ = std::max(0, skill_scroll_ - 1);
+            if (keys_down & KEY_DOWN) {
+                skill_scroll_ = std::min(maximum_scroll, skill_scroll_ + 1);
+            }
+            if (keys_down & KEY_A) {
+                const skills::Definition &definition = definitions[skill_scroll_];
+                if (skills::level_up(core_, definition)) {
+                    notice_.clear();
+                    action = HUD_ACTION_STATE_CHANGED;
+                } else {
+                    notice_ = "Skill requirements are not met.";
+                }
             }
         }
         if (hero_tab_ == 0 && (keys_down & KEY_A) && game_core_can_level_up(core_)) {
@@ -486,9 +506,61 @@ void HudView::draw_hero_info() const
         }
     } else if (hero_tab_ == 2) {
         draw_panel(3.0f, 47.0f, 314.0f, 190.0f);
-        draw_text("Skills", 9.0f, 54.0f, 0.3f, PANEL_TEXT);
-        draw_text("No skill data is available in this build.", 9.0f, 77.0f,
-            0.28f, PANEL_TEXT);
+        std::size_t skill_count = 0;
+        const skills::Definition *definitions =
+            skills::visible_definitions(skill_count);
+        char line[64];
+        std::snprintf(line, sizeof(line), "Skill points: %d", core_->skill_points);
+        draw_text(line, 9.0f, 53.0f, 0.28f, PANEL_TEXT);
+        if (skill_count > 3) {
+            std::snprintf(line, sizeof(line), "%d-%d/%lu", skill_scroll_ + 1,
+                std::min(skill_scroll_ + 3, static_cast<int>(skill_count)),
+                static_cast<unsigned long>(skill_count));
+            draw_text(line, 252.0f, 53.0f, 0.25f, PANEL_TEXT);
+        }
+        const std::size_t start = static_cast<std::size_t>(skill_scroll_);
+        const std::size_t end = std::min(skill_count, start + 3);
+        for (std::size_t index = start; index < end; ++index) {
+            const float y = 78.0f + static_cast<float>(index - start) * 47.0f;
+            const int skill_level = game_core_skill_level(core_, definitions[index].id);
+            const bool can_learn = skills::can_level_up(core_, definitions[index]);
+            const bool at_maximum = definitions[index].maximum_level >= 0
+                && skill_level >= definitions[index].maximum_level;
+            if (index == start) {
+                draw_panel(5.0f, y - 2.0f, 310.0f, 43.0f);
+            }
+            C2D_DrawImageAt(images_[ICON_SKILL], 9.0f, y + 3.0f, 0.3f,
+                NULL, 0.42f, 0.42f);
+            char skill_name[96];
+            if (skill_level > 0) {
+                std::snprintf(skill_name, sizeof(skill_name), "%s (%d)%s",
+                    definitions[index].name, skill_level,
+                    index == start ? (can_learn ? " [ready]"
+                        : (at_maximum ? " [max]" : " [locked]")) : "");
+            } else {
+                std::snprintf(skill_name, sizeof(skill_name), "%s%s",
+                    definitions[index].name,
+                    index == start ? (can_learn ? " [ready]"
+                        : (at_maximum ? " [max]" : " [locked]")) : "");
+            }
+            draw_text(skill_name, 31.0f, y, 0.28f, PANEL_TEXT);
+            draw_text(definitions[index].description, 31.0f, y + 17.0f,
+                0.24f, PANEL_TEXT, true, 276.0f);
+            if (index + 1 < end) {
+                C2D_DrawRectSolid(9.0f, y + 43.0f, 0.4f, 302.0f, 1.0f,
+                    PANEL_BORDER);
+            }
+        }
+        if (skill_count > 3) {
+            draw_text("Up/Down: browse  A: learn selected", 9.0f, 220.0f,
+                0.24f, PANEL_TEXT);
+        } else if (skill_count != 0) {
+            draw_text("A: learn selected", 9.0f, 220.0f, 0.24f, PANEL_TEXT);
+        }
+        if (!notice_.empty()) {
+            draw_text(notice_.c_str(), 9.0f, 220.0f, 0.23f,
+                C2D_Color32(255, 210, 120, 255), true, 300.0f);
+        }
     } else {
         draw_panel(3.0f, 47.0f, 314.0f, 84.0f);
         draw_text("Worn equipment", 8.0f, 49.0f, 0.24f, PANEL_TEXT);

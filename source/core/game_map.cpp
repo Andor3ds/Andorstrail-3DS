@@ -493,6 +493,16 @@ bool move_player(const Document &document, GridPosition &position, int dx, int d
     return true;
 }
 
+GridPosition step_toward(GridPosition position, GridPosition destination)
+{
+    const int dx = destination.x - position.x;
+    const int dy = destination.y - position.y;
+    return {
+        position.x + (dx < 0 ? -1 : (dx > 0 ? 1 : 0)),
+        position.y + (dy < 0 ? -1 : (dy > 0 ? 1 : 0))
+    };
+}
+
 bool resolve_map_transition(
     const TranslatedDocument &source,
     const TranslatedDocument &destination,
