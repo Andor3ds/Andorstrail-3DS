@@ -614,6 +614,7 @@ void HudView::draw_nine_patch(Icon icon, float x, float y, float width,
     const Tex3DS_SubTexture source = crop_nine_patch(images_[icon]);
     const unsigned int source_width = static_cast<unsigned int>(source.width);
     const unsigned int source_height = static_cast<unsigned int>(source.height);
+    if (source_width == 0 || source_height == 0) return;
     unsigned int stretch_x = 0;
     unsigned int stretch_width = 1;
     unsigned int stretch_y = 0;
@@ -638,6 +639,9 @@ void HudView::draw_nine_patch(Icon icon, float x, float y, float width,
         stretch_x = source_width / 3;
         stretch_y = source_height / 3;
     }
+    if (stretch_x >= source_width || stretch_y >= source_height
+            || stretch_width > source_width - stretch_x
+            || stretch_height > source_height - stretch_y) return;
     const unsigned int source_left = stretch_x;
     const unsigned int source_right = source_width - stretch_x - stretch_width;
     const unsigned int source_top = stretch_y;
@@ -672,13 +676,17 @@ void HudView::draw_nine_patch(Icon icon, float x, float y, float width,
     for (unsigned int row = 0; row < 3; ++row) {
         float destination_x = x;
         for (unsigned int column = 0; column < 3; ++column) {
-            Tex3DS_SubTexture part = crop_subtexture(source, source_x[column],
-                source_y[row], source_widths[column], source_heights[row]);
-            C2D_Image image = images_[icon];
-            image.subtex = &part;
-            C2D_DrawImageAt(image, destination_x, destination_y, 0.8f, NULL,
-                destination_widths[column] / source_widths[column],
-                destination_heights[row] / source_heights[row]);
+            if (source_widths[column] != 0 && source_heights[row] != 0
+                    && destination_widths[column] > 0.0f
+                    && destination_heights[row] > 0.0f) {
+                Tex3DS_SubTexture part = crop_subtexture(source, source_x[column],
+                    source_y[row], source_widths[column], source_heights[row]);
+                C2D_Image image = images_[icon];
+                image.subtex = &part;
+                C2D_DrawImageAt(image, destination_x, destination_y, 0.8f, NULL,
+                    destination_widths[column] / source_widths[column],
+                    destination_heights[row] / source_heights[row]);
+            }
             destination_x += destination_widths[column];
         }
         destination_y += destination_heights[row];
