@@ -2,6 +2,7 @@
 #define ANDORSTRAIL_3DS_HUD_VIEW_HPP
 
 #include "game_core.h"
+#include "game_quest_log.hpp"
 #include "map_renderer.hpp"
 
 #include <3ds.h>
@@ -10,6 +11,7 @@
 #include <map>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace andortrail {
 namespace platform3ds {
@@ -86,6 +88,7 @@ private:
     void draw_hero_info() const;
     void draw_level_up() const;
     void draw_toolbox() const;
+    void refresh_quest_log() const;
     void draw_panel(float x, float y, float width, float height) const;
     void draw_nine_patch(Icon icon, float x, float y, float width,
         float height) const;
@@ -112,11 +115,16 @@ private:
     int hero_tab_;
     int selected_level_up_;
     int inventory_scroll_;
+    mutable int quest_scroll_;
     bool toolbox_open_;
     std::string combat_message_;
     std::string notice_;
     mutable std::map<std::string, std::string> item_name_cache_;
     mutable std::map<std::string, std::pair<int, unsigned int> > item_icon_cache_;
+    mutable bool quest_log_dirty_;
+    mutable std::vector<GameCoreValue> quest_snapshot_;
+    mutable std::vector<quest_log::Entry> quest_entries_;
+    mutable std::string quest_log_error_;
 };
 
 }

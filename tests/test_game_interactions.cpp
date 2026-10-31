@@ -3,6 +3,7 @@
 #include "game_combat.hpp"
 #include "game_core.h"
 #include "game_items.hpp"
+#include "game_quest_log.hpp"
 #include "game_resources.h"
 
 #include <cassert>
@@ -10,6 +11,7 @@
 #include <cstdio>
 #include <iostream>
 #include <string>
+#include <vector>
 
 using namespace andortrail::map;
 
@@ -300,6 +302,34 @@ static void test_mikhail_quests(GameResources *resources)
     assert(game_core_inventory_count(&core, "gold") >= 56);
 }
 
+static void test_original_quest_log(GameResources *resources)
+{
+    GameCore core;
+    game_core_init(&core);
+    assert(game_core_set_quest_progress(&core, "andor", 1));
+    assert(game_core_set_quest_progress(&core, "mikhail_bread", 100));
+    assert(game_core_set_quest_progress(&core, "mikhail_rats", 10));
+    assert(game_core_set_quest_progress(&core, "mikhail_rat1_health", 1));
+    assert(game_core_set_quest_progress(&core, "andor_ending", 1));
+
+    std::vector<andortrail::quest_log::Entry> entries;
+    std::string error;
+    assert(andortrail::quest_log::active_quests(resources, &core, entries, error));
+    assert(error.empty());
+    assert(entries.size() == 2);
+    assert(entries[0].id == "andor");
+    assert(entries[0].name == "Search for Andor");
+    assert(entries[0].objective.find("Mikhail says") != std::string::npos);
+    assert(entries[1].id == "mikhail_rats");
+    assert(entries[1].name == "Rats!");
+    assert(entries[1].objective.find("kill the rats") != std::string::npos);
+
+    assert(game_core_set_quest_progress(&core, "mikhail_rats", 100));
+    assert(game_core_set_quest_progress(&core, "andor", 914));
+    assert(andortrail::quest_log::active_quests(resources, &core, entries, error));
+    assert(entries.empty());
+}
+
 static void test_training_rat_combat(GameResources *resources, const char *save_path)
 {
     assert(save_path != NULL);
@@ -397,6 +427,7 @@ int main(int argc, char **argv)
     test_home_rest_and_container(&resources);
     test_original_sign_phrase(&resources);
     test_mikhail_quests(&resources);
+    test_original_quest_log(&resources);
     test_training_rat_combat(&resources, argv[2]);
     game_resources_dispose(&resources);
     std::cout << "game interaction data tests passed\n";

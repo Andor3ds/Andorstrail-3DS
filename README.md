@@ -77,13 +77,15 @@ Rat defeats award the source-derived experience;
 the level-up choices and progression values are based on Android, and older
 saves are migrated to the current progression format. The portrait opens Hero
 Info and the toolbox exposes save and navigation entries. This UI port is still
-incomplete: Hero Info only exposes the currently implemented Andor quest,
-equipment is not yet backed by equipped-item state, and skill allocation and
-quick-item actions are not ported; the world-map view is unavailable until the
-original visited-map tiles are bundled. Inventory names and item sprites come
-from the original item records and can be scrolled. HUD and dialogue text use
-Citro2D's system-font fallback when a font handle is not available; visual
-rendering still needs confirmation on hardware.
+incomplete: the quest log reads active, visible entries from the original quest
+records for progress values in the save, but gameplay progression is only
+implemented for the current Andor/Mikhail slice. Equipment is not yet backed by
+equipped-item state, skill allocation and quick-item actions are not ported, and
+the world-map view is unavailable until the original visited-map tiles are
+bundled. Inventory names and item sprites come from the original item records
+and can be scrolled. HUD and dialogue text use Citro2D's system-font fallback
+when a font handle is not available; visual rendering still needs confirmation
+on hardware.
 
 The Home map's source GIDs resolve to
 the original tileset PNGs; the top-screen camera follows the player, and D-pad

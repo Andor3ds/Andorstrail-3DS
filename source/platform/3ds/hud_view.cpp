@@ -114,8 +114,8 @@ Tex3DS_SubTexture crop_subtexture(const Tex3DS_SubTexture &source,
 HudView::HudView()
     : core_(NULL), renderer_(NULL), font_(NULL), text_buffer_(NULL),
       resources_(NULL), screen_(SCREEN_STATUS), hero_tab_(0), selected_level_up_(0),
-      inventory_scroll_(0),
-      toolbox_open_(false)
+      inventory_scroll_(0), quest_scroll_(0), toolbox_open_(false),
+      quest_log_dirty_(true)
 {
     std::memset(sheets_, 0, sizeof(sheets_));
     std::memset(images_, 0, sizeof(images_));
@@ -176,7 +176,12 @@ void HudView::dispose()
     hero_tab_ = 0;
     selected_level_up_ = 0;
     inventory_scroll_ = 0;
+    quest_scroll_ = 0;
     toolbox_open_ = false;
+    quest_log_dirty_ = true;
+    quest_snapshot_.clear();
+    quest_entries_.clear();
+    quest_log_error_.clear();
     combat_message_.clear();
     item_name_cache_.clear();
     item_icon_cache_.clear();
@@ -291,6 +296,13 @@ bool HudView::handle_keys(u32 keys_down, HudAction &action)
             if (keys_down & KEY_UP) inventory_scroll_ = std::max(0, inventory_scroll_ - 1);
             if (keys_down & KEY_DOWN) {
                 inventory_scroll_ = std::min(maximum_scroll, inventory_scroll_ + 1);
+            }
+        } else if (hero_tab_ == 1) {
+            if (keys_down & KEY_UP) quest_scroll_ = std::max(0, quest_scroll_ - 1);
+            if (keys_down & KEY_DOWN) {
+                const int maximum_scroll = quest_entries_.empty()
+                    ? 0 : static_cast<int>(quest_entries_.size() - 1);
+                quest_scroll_ = std::min(maximum_scroll, quest_scroll_ + 1);
             }
         }
         if (hero_tab_ == 0 && (keys_down & KEY_A) && game_core_can_level_up(core_)) {
@@ -449,42 +461,27 @@ void HudView::draw_hero_info() const
         draw_panel(3.0f, 47.0f, 314.0f, 190.0f);
         draw_panel(5.0f, 50.0f, 310.0f, 23.0f);
         draw_text("Active quests", 10.0f, 55.0f, 0.29f, PANEL_TEXT);
-        const GameResourceRecordEntry *record = game_resources_find(
-            GAME_RESOURCE_QUEST, "andor", NULL
-        );
-        if (record != NULL) {
-            GameJsonDocument document;
-            GameJsonRef quest;
-            if (game_resources_open_record(resources_, record, &document, &quest)) {
-                char quest_name[96];
-                if (game_json_string_copy(game_json_object_get(quest, "name"),
-                        quest_name, sizeof(quest_name))) {
-                    draw_panel(5.0f, 76.0f, 310.0f, 24.0f);
-                    C2D_DrawCircleSolid(14.0f, 88.0f, 0.2f, 5.0f, PANEL_BORDER);
-                    draw_text(quest_name, 25.0f, 82.0f, 0.3f, PANEL_TEXT);
-                }
-                const int progress = game_core_quest_progress(core_, "andor");
-                GameJsonRef stages = game_json_object_get(quest, "stages");
-                int selected_progress = -1;
-                char log_text[256] = "";
-                for (std::size_t stage_index = 0;
-                        stage_index < game_json_array_size(stages); ++stage_index) {
-                    GameJsonRef stage = game_json_array_get(stages, stage_index);
-                    int64_t stage_progress = -1;
-                    char stage_text[sizeof(log_text)];
-                    if (!game_json_integer(game_json_object_get(stage, "progress"),
-                                &stage_progress)
-                            || stage_progress > progress || stage_progress < selected_progress
-                            || !game_json_string_copy(game_json_object_get(stage, "logText"),
-                                stage_text, sizeof(stage_text))) continue;
-                    selected_progress = static_cast<int>(stage_progress);
-                    std::snprintf(log_text, sizeof(log_text), "%s", stage_text);
-                }
-                if (log_text[0] != '\0') {
-                    draw_panel(5.0f, 102.0f, 310.0f, 74.0f);
-                    draw_text(log_text, 10.0f, 108.0f, 0.28f, PANEL_TEXT, true);
-                }
-                game_json_dispose(&document);
+        refresh_quest_log();
+        draw_panel(5.0f, 76.0f, 310.0f, 151.0f);
+        if (!quest_log_error_.empty()) {
+            draw_text(quest_log_error_.c_str(), 10.0f, 84.0f, 0.28f,
+                PANEL_TEXT, true);
+        } else if (quest_entries_.empty()) {
+            draw_text("No active quests.", 10.0f, 84.0f, 0.28f, PANEL_TEXT);
+        } else {
+            const std::size_t index = static_cast<std::size_t>(quest_scroll_);
+            const quest_log::Entry &entry = quest_entries_[index];
+            char page[32];
+            std::snprintf(page, sizeof(page), "%lu/%lu",
+                static_cast<unsigned long>(index + 1),
+                static_cast<unsigned long>(quest_entries_.size()));
+            draw_text(entry.name.c_str(), 10.0f, 83.0f, 0.3f, PANEL_TEXT);
+            draw_text(page, 276.0f, 83.0f, 0.26f, PANEL_TEXT);
+            draw_text(entry.objective.c_str(), 10.0f, 109.0f, 0.28f,
+                PANEL_TEXT, true, 294.0f);
+            if (quest_entries_.size() > 1) {
+                draw_text("Up/Down: browse quests", 10.0f, 215.0f, 0.25f,
+                    PANEL_TEXT);
             }
         }
     } else if (hero_tab_ == 2) {
@@ -601,6 +598,33 @@ void HudView::draw_toolbox() const
         C2D_DrawImageAt(images_[icons[index]], 277.0f,
             47.0f + index * 40.0f, 0.5f, NULL);
     }
+}
+
+void HudView::refresh_quest_log() const
+{
+    if (core_->quest_count > GAME_CORE_MAX_VALUES) {
+        quest_entries_.clear();
+        quest_snapshot_.clear();
+        quest_log_error_ = "invalid quest state";
+        quest_scroll_ = 0;
+        quest_log_dirty_ = false;
+        return;
+    }
+    bool changed = quest_snapshot_.size() != core_->quest_count;
+    for (std::size_t index = 0; !changed && index < core_->quest_count; ++index) {
+        changed = quest_snapshot_[index].value != core_->quests[index].value
+            || std::strcmp(quest_snapshot_[index].id, core_->quests[index].id) != 0;
+    }
+    if (!quest_log_dirty_ && !changed) return;
+
+    if (!quest_log::active_quests(resources_, core_, quest_entries_, quest_log_error_)) {
+        quest_entries_.clear();
+    }
+    quest_snapshot_.assign(core_->quests, core_->quests + core_->quest_count);
+    const int maximum_scroll = quest_entries_.empty()
+        ? 0 : static_cast<int>(quest_entries_.size() - 1);
+    quest_scroll_ = std::min(quest_scroll_, maximum_scroll);
+    quest_log_dirty_ = false;
 }
 
 void HudView::draw_panel(float x, float y, float width, float height) const
