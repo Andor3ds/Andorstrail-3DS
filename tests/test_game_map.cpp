@@ -72,6 +72,31 @@ int main(int argc, char **argv)
     const GridPosition destination_step =
         andortrail::map::step_toward({2, 4}, {2, 4});
     assert(destination_step.x == 2 && destination_step.y == 4);
+    assert(andortrail::map::is_adjacent({1, 1}, {2, 2}));
+    assert(andortrail::map::is_adjacent({1, 1}, {2, 1}));
+    assert(!andortrail::map::is_adjacent({1, 1}, {1, 1}));
+    assert(!andortrail::map::is_adjacent({1, 1}, {3, 1}));
+
+    Document path_map;
+    path_map.width = 5;
+    path_map.height = 5;
+    Layer path_walkable;
+    path_walkable.name = "walkable";
+    path_walkable.gids.assign(25, 0);
+    path_walkable.gids[2 * 5 + 1] = 1;
+    path_map.layers.push_back(path_walkable);
+    GridPosition next_step = {-1, -1};
+    assert(andortrail::map::find_path_step(path_map, {1, 1}, {3, 1},
+        std::function<bool(GridPosition)>(), next_step));
+    assert(next_step.x == 2 && next_step.y == 2);
+    assert(andortrail::map::find_path_step(path_map, {1, 1}, {3, 1},
+        [](GridPosition position) {
+            return position.x != 2 || position.y != 2;
+        }, next_step));
+    assert(next_step.x == 2 && next_step.y == 0);
+    assert(!andortrail::map::find_path_step(path_map, {1, 1}, {1, 1},
+        std::function<bool(GridPosition)>(), next_step));
+
     for (int step = 0; step < 6; ++step) {
         assert(andortrail::map::move_player(home, player, 1, 0));
     }

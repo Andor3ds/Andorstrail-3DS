@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import gzip
+import json
 import shutil
 import struct
 import xml.etree.ElementTree as ET
@@ -16,8 +17,14 @@ RENDER_MAPS = ("home", "crossglen", "crossglen_hall", "wild1")
 RENDERED_LAYERS = {"base", "ground", "objects", "above", "top"}
 ANDROID_GID_FLAGS = 0xF0000000
 ACTOR_SPRITE_SHEETS = ("monsters_mage2.png", "monsters_men.png", "monsters_rats.png")
+COMPATIBILITY_UI_ASSETS = (
+    "ui_red_foreground.9.png",
+    "ui_yellow_foreground.9.png",
+)
 UI_ASSETS = (
     "ui_bar_background.9.png",
+    "ui_bar_red_foreground.9.png",
+    "ui_bar_blue_foreground.9.png",
     "ui_icon_combat.png",
     "ui_icon_equipment.png",
     "ui_icon_map.png",
@@ -113,6 +120,67 @@ def _layer_gids(layer: ET.Element, width: int, height: int) -> tuple[int, ...]:
         raise ValueError(f"TMX layer {layer.get('name')} has {len(decoded)} bytes, expected {expected_size}")
     return struct.unpack(f"<{width * height}I", decoded)
 
+def actor_icon_sheets(
+    source_root: Path,
+    map_names: tuple[str, ...],
+) -> tuple[str, ...]:
+    resource_list = source_root / "res" / "values" / "loadresources.xml"
+    raw_directory = source_root / "res" / "raw"
+    arrays = ET.parse(resource_list).getroot()
+    monster_array = next(
+        (array for array in arrays.findall("array")
+         if array.get("name") == "loadresource_monsters"),
+        None,
+    )
+    if monster_array is None:
+        raise ValueError("Android loadresources.xml has no loadresource_monsters array")
+
+    monsters_by_group: dict[str, list[dict[str, object]]] = {}
+    for item in monster_array.findall("item"):
+        reference = (item.text or "").strip()
+        if not reference.startswith("@raw/"):
+            raise ValueError(f"expected @raw monster reference, got {reference!r}")
+        name = reference[len("@raw/"):]
+        path = raw_directory / f"{name}.json"
+        if not name or "/" in name or "\\" in name or not path.is_file():
+            raise ValueError(f"configured Android monster resource is missing: {name}")
+        records = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(records, list):
+            raise ValueError(f"Android monster resource is not an array: {name}")
+        for monster in records:
+            if not isinstance(monster, dict):
+                raise ValueError(f"Android monster record is invalid: {name}")
+            group = monster.get("spawnGroup", monster.get("id"))
+            if isinstance(group, str):
+                monsters_by_group.setdefault(group.lower(), []).append(monster)
+
+    sheets = list(ACTOR_SPRITE_SHEETS)
+    xml_root = source_root / "res" / "xml"
+    for map_name in map_names:
+        root = ET.parse(xml_root / f"{map_name}.tmx").getroot()
+        for object_group in root.findall("objectgroup"):
+            for spawn_area in object_group.findall("object"):
+                properties = {
+                    prop.get("name"): prop.get("value")
+                    for prop in spawn_area.findall("properties/property")
+                }
+                if properties.get("active") == "false":
+                    continue
+                group = properties.get("spawngroup", spawn_area.get("name"))
+                if not group:
+                    continue
+                candidates = monsters_by_group.get(group.lower(), ())
+                if not candidates:
+                    candidates = monsters_by_group.get(group.lower().replace(" ", "_"), ())
+                for monster in candidates:
+                    icon_id = monster.get("iconID")
+                    if not isinstance(icon_id, str) or ":" not in icon_id:
+                        continue
+                    sheet = icon_id.rsplit(":", 1)[0] + ".png"
+                    if sheet not in sheets:
+                        sheets.append(sheet)
+    return tuple(sheets)
+
 
 def copy_map_render_assets(
     source_root: Path,
@@ -187,12 +255,15 @@ def copy_map_render_assets(
         raise ValueError("player image conflicts with a map tileset image")
     asset_directory = project_root / "assets" / "map" / "home"
     source_path_by_name[hero_path.name] = hero_path
-    for name in ACTOR_SPRITE_SHEETS:
-        actor_path = asset_directory / name
+    actor_sheets = actor_icon_sheets(source_root, map_names)
+    for name in actor_sheets:
+        actor_path = android_res / "drawable" / name
         if not actor_path.is_file():
             raise ValueError(f"original actor sprite sheet is missing: {actor_path}")
         source_path_by_name[name] = actor_path
-    source_names = used_images + [hero_path.name] + list(ACTOR_SPRITE_SHEETS)
+    source_names = list(dict.fromkeys(
+        used_images + [hero_path.name] + list(actor_sheets)
+    ))
 
     asset_directory.mkdir(parents=True, exist_ok=True)
     gfx_directory = project_root / "romfs" / "gfx"
@@ -210,7 +281,24 @@ def copy_map_render_assets(
     return len(source_names), byte_count
 
 
+def validate_ui_assets(source_root: Path, project_root: Path) -> None:
+    source_directory = source_root / "res" / "drawable"
+    missing = [
+        name for name in UI_ASSETS
+        if not (source_directory / name).is_file()
+        and not (
+            name in COMPATIBILITY_UI_ASSETS
+            and (project_root / "assets" / "ui" / name).is_file()
+        )
+    ]
+    if missing:
+        raise ValueError(
+            "original Android UI assets are missing: " + ", ".join(missing)
+        )
+
+
 def copy_ui_assets(source_root: Path, project_root: Path) -> tuple[int, int]:
+    validate_ui_assets(source_root, project_root)
     source_directory = source_root / "res" / "drawable"
     asset_directory = project_root / "assets" / "ui"
     gfx_directory = project_root / "romfs" / "gfx" / "ui"
@@ -221,7 +309,7 @@ def copy_ui_assets(source_root: Path, project_root: Path) -> tuple[int, int]:
     for name in UI_ASSETS:
         source_path = source_directory / name
         if not source_path.is_file():
-            raise ValueError(f"original Android UI asset is missing: {source_path}")
+            source_path = project_root / "assets" / "ui" / name
         target_path = asset_directory / name
         if source_path.resolve() != target_path.resolve():
             shutil.copyfile(source_path, target_path)
@@ -248,6 +336,7 @@ def main() -> None:
         help="Android map IDs whose default layer textures should be bundled",
     )
     arguments = parser.parse_args()
+    validate_ui_assets(arguments.source, arguments.project)
     map_count, byte_count = copy_map_data(arguments.source, arguments.project)
     print(f"Bundled {map_count} Android maps and worldmap.xml ({byte_count} bytes)")
     image_count, image_bytes = copy_map_render_assets(

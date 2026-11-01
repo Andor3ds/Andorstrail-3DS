@@ -14,7 +14,7 @@ int main(void)
 {
     gfxInitDefault();
     hidSetRepeatParameters(15, 10);
-    GameCore core;
+    static GameCore core;
     game_core_init(&core);
     const char *save_path = "sdmc:/3ds/andorstrail-save.dat";
     const GameCoreLoadResult save_load_result = game_core_load(&core, save_path);
@@ -81,6 +81,16 @@ int main(void)
         else error = "map or HUD initialization failed";
     }
     renderer_ready = renderer_ready && hud_ready;
+    std::string save_error;
+    const auto save_game = [&]() {
+        if (!renderer.persist_state(save_error)) return false;
+        if (!game_core_save(&core, save_path)) {
+            save_error = "Save file could not be written.";
+            return false;
+        }
+        save_error.clear();
+        return true;
+    };
 
     if (!renderer_ready) {
         consoleInit(GFX_TOP, NULL);
@@ -105,8 +115,9 @@ int main(void)
             const bool hud_consumed = hud.handle_keys(keys_down, hud_action);
             if (hud_action == andortrail::platform3ds::HUD_ACTION_SAVE
                     || hud_action == andortrail::platform3ds::HUD_ACTION_STATE_CHANGED) {
-                if (!save_permitted || !game_core_save(&core, save_path)) {
-                    hud.set_notice("Save failed.");
+                if (!save_permitted || !save_game()) {
+                    hud.set_notice(save_error.empty() ? "Save failed."
+                        : save_error.c_str());
                 } else {
                     hud.set_notice(hud_action == andortrail::platform3ds::HUD_ACTION_SAVE
                         ? "Game saved." : "Game progress saved.");
@@ -121,8 +132,8 @@ int main(void)
                         std::string dialogue_error;
                         if (!renderer.choose_conversation_reply(dialogue_error)) {
                             hud.set_notice(dialogue_error.c_str());
-                        } else if (save_permitted && !game_core_save(&core, save_path)) {
-                            hud.set_notice("Save failed.");
+                        } else if (save_permitted && !save_game()) {
+                            hud.set_notice(save_error.c_str());
                         }
                     }
                     if (keys_down & KEY_B) {
@@ -133,8 +144,8 @@ int main(void)
                         std::string shop_error;
                         if (!renderer.buy_shop_bread(shop_error)) {
                             hud.set_notice(shop_error.c_str());
-                        } else if (save_permitted && !game_core_save(&core, save_path)) {
-                            hud.set_notice("Save failed.");
+                        } else if (save_permitted && !save_game()) {
+                            hud.set_notice(save_error.c_str());
                         }
                     }
                     if (keys_down & KEY_B) {
@@ -147,24 +158,49 @@ int main(void)
                 int move_x = 0;
                 int move_y = 0;
                 if (keys_down & KEY_A) {
-                    renderer.interact();
-                    if (save_permitted && !game_core_save(&core, save_path)) {
-                        hud.set_notice("Save failed.");
+                    if (renderer.can_attack_with_action_button()) {
+                        const bool attacked = renderer.attack_nearby_enemy();
+                        if (!attacked && !renderer.interaction_message().empty()) {
+                            hud.set_notice(renderer.interaction_message().c_str());
+                        } else if (attacked && save_permitted && !save_game()) {
+                            hud.set_notice(save_error.c_str());
+                        }
+                    } else {
+                        renderer.interact();
+                        if (save_permitted && !save_game()) {
+                            hud.set_notice(save_error.c_str());
+                        }
                     }
                 } else if (keys_down & KEY_X) {
-                    if (renderer.attack_nearby_rat()) {
-                        if (save_permitted && !game_core_save(&core, save_path)) {
-                            hud.set_notice("Save failed.");
+                    if (renderer.attack_nearby_enemy()) {
+                        if (save_permitted && !save_game()) {
+                            hud.set_notice(save_error.c_str());
                         }
+                    } else if (!renderer.interaction_message().empty()) {
+                        hud.set_notice(renderer.interaction_message().c_str());
+                    }
+                } else if ((keys_down & KEY_B) && renderer.is_in_combat()) {
+                    if (renderer.end_combat_turn() && save_permitted
+                            && !save_game()) {
+                        hud.set_notice(save_error.c_str());
+                    }
+                } else if (renderer.is_in_combat()
+                        && (keys_down & (KEY_L | KEY_R))) {
+                    if (renderer.cycle_combat_target(
+                            (keys_down & KEY_R) ? 1 : -1)) {
+                        hud.set_notice(renderer.interaction_message().c_str());
                     }
                 } else if (keys_down & KEY_LEFT) move_x = -1;
                 else if (keys_down & KEY_RIGHT) move_x = 1;
                 else if (keys_down & KEY_UP) move_y = -1;
                 else if (keys_down & KEY_DOWN) move_y = 1;
                 if (move_x != 0 || move_y != 0) {
-                    renderer.move_player(move_x, move_y);
-                    if (save_permitted && !game_core_save(&core, save_path)) {
-                        hud.set_notice("Save failed.");
+                    const bool moved = renderer.move_player(move_x, move_y);
+                    if (!moved && renderer.is_in_combat()
+                            && !renderer.interaction_message().empty()) {
+                        hud.set_notice(renderer.interaction_message().c_str());
+                    } else if (moved && save_permitted && !save_game()) {
+                        hud.set_notice(save_error.c_str());
                     }
                 }
             }
@@ -176,6 +212,7 @@ int main(void)
             C2D_SceneBegin(top);
             C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
             renderer.draw(400, 240);
+            hud.draw_combat_overlay();
             if (renderer.has_modal_interaction()) {
                 std::string text = renderer.interaction_message();
                 if (renderer.has_conversation()) {
@@ -203,9 +240,11 @@ int main(void)
         game_core_update(&core);
     }
 
-    if (save_permitted && !game_core_save(&core, save_path)) {
+    if (save_permitted
+            && !(renderer_ready ? save_game() : game_core_save(&core, save_path))) {
         consoleInit(GFX_TOP, NULL);
-        printf("Andor's Trail\nSave failed:\n%s\n", save_path);
+        printf("Andor's Trail\nSave failed:\n%s\n",
+            save_error.empty() ? save_path : save_error.c_str());
         printf("Press START to exit.\n");
         while (aptMainLoop()) {
             hidScanInput();

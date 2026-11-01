@@ -1,4 +1,5 @@
 #include "hud_view.hpp"
+#include "game_combat.hpp"
 #include "game_items.hpp"
 
 #include <algorithm>
@@ -12,6 +13,8 @@ namespace {
 
 const char *const UI_IMAGE_NAMES[] = {
     "ui_bar_background.9.png",
+    "ui_bar_red_foreground.9.png",
+    "ui_bar_blue_foreground.9.png",
     "ui_icon_combat.png",
     "ui_icon_equipment.png",
     "ui_icon_map.png",
@@ -114,7 +117,9 @@ Tex3DS_SubTexture crop_subtexture(const Tex3DS_SubTexture &source,
 HudView::HudView()
     : core_(NULL), renderer_(NULL), font_(NULL), text_buffer_(NULL),
       resources_(NULL), screen_(SCREEN_STATUS), hero_tab_(0), selected_level_up_(0),
-      inventory_scroll_(0), quest_scroll_(0), skill_scroll_(0), toolbox_open_(false),
+      inventory_scroll_(0), selected_inventory_index_(-1), inventory_category_(0),
+      inventory_sort_(0), selected_quick_slot_(0), selected_equipment_slot_(-1),
+      quest_scroll_(0), skill_scroll_(0), toolbox_open_(false),
       quest_log_dirty_(true)
 {
     std::memset(sheets_, 0, sizeof(sheets_));
@@ -155,6 +160,8 @@ bool HudView::initialize(C2D_Font font, C2D_TextBuf text_buffer, GameResources *
     selection_yellow_ = crop_tile(images_[ICON_SELECTIONS], 1, 5);
     bar_background_ = crop_nine_patch(images_[ICON_BAR_BACKGROUND]);
     bar_red_ = crop_nine_patch(images_[ICON_RED_FOREGROUND]);
+    combat_bar_red_ = crop_nine_patch(images_[ICON_COMBAT_RED_FOREGROUND]);
+    combat_bar_blue_ = crop_nine_patch(images_[ICON_COMBAT_BLUE_FOREGROUND]);
     bar_yellow_ = crop_nine_patch(images_[ICON_YELLOW_FOREGROUND]);
     error.clear();
     return true;
@@ -176,6 +183,13 @@ void HudView::dispose()
     hero_tab_ = 0;
     selected_level_up_ = 0;
     inventory_scroll_ = 0;
+    selected_inventory_index_ = -1;
+    selected_equipment_slot_ = -1;
+    selected_equipment_slot_ = -1;
+    inventory_category_ = 0;
+    inventory_sort_ = 0;
+    selected_quick_slot_ = 0;
+    selected_equipment_slot_ = -1;
     quest_scroll_ = 0;
     skill_scroll_ = 0;
     toolbox_open_ = false;
@@ -185,6 +199,8 @@ void HudView::dispose()
     quest_log_error_.clear();
     combat_message_.clear();
     item_name_cache_.clear();
+    item_properties_cache_.clear();
+    inventory_error_.clear();
     item_icon_cache_.clear();
 }
 
@@ -227,6 +243,43 @@ bool HudView::load_images(std::string &error)
 
 HudAction HudView::handle_touch(int x, int y)
 {
+    if (screen_ == SCREEN_QUICK_ITEMS) {
+        if (y >= 48 && y < 108) {
+            const int slot = (y - 48) / 20;
+            if (slot < GAME_CORE_QUICK_SLOTS) {
+                selected_quick_slot_ = slot;
+                return HUD_ACTION_NONE;
+            }
+        }
+        if (y >= 115 && y < 223) {
+            const int index = inventory_scroll_ + (y - 115) / 18;
+            if (index >= 0
+                    && static_cast<std::size_t>(index) < core_->inventory_count) {
+                selected_inventory_index_ = index;
+                std::string error;
+                andortrail::items::ActionType action;
+                GameCoreEquipmentSlot slot = GAME_CORE_EQUIP_WEAPON;
+                bool two_handed = false;
+                const std::string &item_id = core_->inventory[index].id;
+                if (!andortrail::items::item_action(resources_, item_id, action,
+                        slot, two_handed, error)) {
+                    notice_ = error;
+                    return HUD_ACTION_NONE;
+                }
+                if (action != andortrail::items::ACTION_USE) {
+                    notice_ = "Only usable items can be assigned to quick slots.";
+                    return HUD_ACTION_NONE;
+                }
+                if (game_core_set_quick_item(core_, selected_quick_slot_,
+                        item_id.c_str())) {
+                    notice_ = "Quick slot assigned.";
+                    return HUD_ACTION_STATE_CHANGED;
+                }
+                notice_ = "Quick slot assignment failed.";
+            }
+        }
+        return HUD_ACTION_NONE;
+    }
     if (screen_ == SCREEN_STATUS) {
         if (x < 43 && y < 44) {
             screen_ = SCREEN_HERO_INFO;
@@ -254,6 +307,44 @@ HudAction HudView::handle_touch(int x, int y)
         if (y < 48 && x >= 0 && x < 320) {
             hero_tab_ = std::min(3, x / 80);
             return HUD_ACTION_NONE;
+        }
+        if (hero_tab_ == 3 && y >= 138 && y < 154) {
+            if (x < 160) inventory_category_ = (inventory_category_ + 1) % 8;
+            else inventory_sort_ = (inventory_sort_ + 1) % 6;
+            inventory_scroll_ = 0;
+            selected_inventory_index_ = -1;
+            selected_equipment_slot_ = -1;
+            inventory_error_.clear();
+            notice_.clear();
+            return HUD_ACTION_NONE;
+        }
+        if (hero_tab_ == 3 && y >= 154 && y < 226) {
+            const std::vector<int> visible = filtered_inventory_indices();
+            const int visible_index = inventory_scroll_ + (y - 154) / 18;
+            if (visible_index >= 0
+                    && static_cast<std::size_t>(visible_index) < visible.size()) {
+                selected_inventory_index_ = visible[visible_index];
+                notice_.clear();
+            }
+            return HUD_ACTION_NONE;
+        }
+        if (hero_tab_ == 3) {
+            const int slot_x[] = {61, 84, 107, 24, 24, 147, 147, 61, 84};
+            const int slot_y[] = {53, 53, 53, 76, 98, 76, 98, 98, 98};
+            const GameCoreEquipmentSlot slot_ids[] = {
+                GAME_CORE_EQUIP_HEAD, GAME_CORE_EQUIP_BODY, GAME_CORE_EQUIP_NECK,
+                GAME_CORE_EQUIP_WEAPON, GAME_CORE_EQUIP_LEFT_RING,
+                GAME_CORE_EQUIP_SHIELD, GAME_CORE_EQUIP_RIGHT_RING,
+                GAME_CORE_EQUIP_HAND, GAME_CORE_EQUIP_FEET
+            };
+            for (int slot = 0; slot < GAME_CORE_EQUIPMENT_SLOTS; ++slot) {
+                if (x >= slot_x[slot] && x < slot_x[slot] + 19
+                        && y >= slot_y[slot] && y < slot_y[slot] + 19) {
+                    selected_equipment_slot_ = slot_ids[slot];
+                    notice_.clear();
+                    return HUD_ACTION_NONE;
+                }
+            }
         }
         if (hero_tab_ == 0 && game_core_can_level_up(core_)
                 && y >= 184 && x >= 78 && x <= 242) {
@@ -287,16 +378,210 @@ bool HudView::handle_keys(u32 keys_down, HudAction &action)
         screen_ = screen_ == SCREEN_LEVEL_UP ? SCREEN_HERO_INFO : SCREEN_STATUS;
         return true;
     }
+    if (screen_ == SCREEN_QUICK_ITEMS) {
+        if (keys_down & KEY_LEFT) {
+            selected_quick_slot_ = (selected_quick_slot_ + GAME_CORE_QUICK_SLOTS - 1)
+                % GAME_CORE_QUICK_SLOTS;
+        }
+        if (keys_down & KEY_RIGHT) {
+            selected_quick_slot_ = (selected_quick_slot_ + 1)
+                % GAME_CORE_QUICK_SLOTS;
+        }
+        const int maximum_scroll = core_->inventory_count > 6
+            ? static_cast<int>(core_->inventory_count - 6) : 0;
+        if (keys_down & KEY_UP) {
+            if (selected_inventory_index_ < 0) {
+                selected_inventory_index_ = inventory_scroll_;
+            } else {
+                selected_inventory_index_ = std::max(0,
+                    selected_inventory_index_ - 1);
+            }
+            if (selected_inventory_index_ < inventory_scroll_) {
+                inventory_scroll_ = selected_inventory_index_;
+            }
+        }
+        if (keys_down & KEY_DOWN) {
+            if (selected_inventory_index_ < 0) {
+                selected_inventory_index_ = inventory_scroll_;
+            } else if (static_cast<std::size_t>(selected_inventory_index_ + 1)
+                    < core_->inventory_count) {
+                ++selected_inventory_index_;
+            }
+            if (selected_inventory_index_ >= inventory_scroll_ + 6) {
+                inventory_scroll_ = std::min(maximum_scroll,
+                    selected_inventory_index_ - 5);
+            }
+        }
+        if (keys_down & KEY_Y) {
+            if (selected_inventory_index_ < 0
+                    || static_cast<std::size_t>(selected_inventory_index_)
+                        >= core_->inventory_count) {
+                notice_ = "Select an inventory item first.";
+            } else {
+                const std::string &item_id =
+                    core_->inventory[selected_inventory_index_].id;
+                andortrail::items::ActionType item_type;
+                GameCoreEquipmentSlot slot = GAME_CORE_EQUIP_WEAPON;
+                bool two_handed = false;
+                std::string error;
+                if (!andortrail::items::item_action(resources_, item_id,
+                        item_type, slot, two_handed, error)) {
+                    notice_ = error;
+                } else if (item_type != andortrail::items::ACTION_USE) {
+                    notice_ = "Only usable items can be assigned to quick slots.";
+                } else if (!game_core_set_quick_item(core_, selected_quick_slot_,
+                        item_id.c_str())) {
+                    notice_ = "Quick slot assignment failed.";
+                } else {
+                    notice_ = "Quick slot assigned.";
+                    action = HUD_ACTION_STATE_CHANGED;
+                }
+            }
+        }
+        if (keys_down & KEY_A) {
+            const char *item_id = game_core_quick_item(core_,
+                static_cast<std::size_t>(selected_quick_slot_));
+            if (item_id == NULL) {
+                notice_ = "Quick slot is empty.";
+            } else if (game_core_inventory_count(core_, item_id) <= 0) {
+                notice_ = "That quick-slot item is no longer in inventory.";
+            } else {
+                andortrail::items::ActionType item_type;
+                GameCoreEquipmentSlot slot = GAME_CORE_EQUIP_WEAPON;
+                bool two_handed = false;
+                std::string error;
+                if (!andortrail::items::item_action(resources_, item_id,
+                        item_type, slot, two_handed, error)) {
+                    notice_ = error;
+                } else if (item_type != andortrail::items::ACTION_USE) {
+                    notice_ = "That quick-slot item cannot be used.";
+                } else if (renderer_->use_or_equip_item(item_id, error)) {
+                    action = HUD_ACTION_STATE_CHANGED;
+                    notice_ = renderer_->interaction_message();
+                } else {
+                    notice_ = error;
+                }
+            }
+        }
+        return true;
+    }
     if (screen_ == SCREEN_HERO_INFO) {
         if (keys_down & KEY_LEFT) hero_tab_ = (hero_tab_ + 3) % 4;
         if (keys_down & KEY_RIGHT) hero_tab_ = (hero_tab_ + 1) % 4;
         if (hero_tab_ == 3) {
-            const int maximum_scroll = static_cast<int>(
-                core_->inventory_count > 4 ? core_->inventory_count - 4 : 0
-            );
-            if (keys_down & KEY_UP) inventory_scroll_ = std::max(0, inventory_scroll_ - 1);
+            if (keys_down & KEY_Y) {
+                inventory_category_ = (inventory_category_ + 7) % 8;
+                inventory_scroll_ = 0;
+                selected_inventory_index_ = -1;
+                selected_equipment_slot_ = -1;
+            }
+            if (keys_down & KEY_X) {
+                inventory_category_ = (inventory_category_ + 1) % 8;
+                inventory_scroll_ = 0;
+                selected_inventory_index_ = -1;
+                selected_equipment_slot_ = -1;
+            }
+            if (keys_down & KEY_L) {
+                inventory_sort_ = (inventory_sort_ + 5) % 6;
+                inventory_scroll_ = 0;
+                selected_inventory_index_ = -1;
+                selected_equipment_slot_ = -1;
+            }
+            if (keys_down & KEY_R) {
+                inventory_sort_ = (inventory_sort_ + 1) % 6;
+                inventory_scroll_ = 0;
+                selected_inventory_index_ = -1;
+                selected_equipment_slot_ = -1;
+            }
+            const std::vector<int> visible = filtered_inventory_indices();
+            const int maximum_scroll = visible.size() > 4
+                ? static_cast<int>(visible.size() - 4) : 0;
             if (keys_down & KEY_DOWN) {
-                inventory_scroll_ = std::min(maximum_scroll, inventory_scroll_ + 1);
+                int position = -1;
+                for (std::size_t index = 0; index < visible.size(); ++index) {
+                    if (visible[index] == selected_inventory_index_) {
+                        position = static_cast<int>(index);
+                        break;
+                    }
+                }
+                position = std::min(static_cast<int>(visible.size()) - 1,
+                    position < 0 ? 0 : position + 1);
+                if (position >= 0 && !visible.empty()) {
+                    selected_inventory_index_ = visible[position];
+                    inventory_scroll_ = std::min(maximum_scroll,
+                        std::max(0, position - 3));
+                    selected_equipment_slot_ = -1;
+                }
+            }
+            if (keys_down & KEY_UP) {
+                int position = -1;
+                for (std::size_t index = 0; index < visible.size(); ++index) {
+                    if (visible[index] == selected_inventory_index_) {
+                        position = static_cast<int>(index);
+                        break;
+                    }
+                }
+                position = position < 0 ? 0 : std::max(0, position - 1);
+                if (!visible.empty()) {
+                    selected_inventory_index_ = visible[position];
+                    inventory_scroll_ = std::min(maximum_scroll,
+                        std::max(0, position - 3));
+                    selected_equipment_slot_ = -1;
+                }
+            }
+            if (keys_down & KEY_A) {
+                if (selected_inventory_index_ >= 0
+                        && static_cast<std::size_t>(selected_inventory_index_)
+                            < core_->inventory_count) {
+                    std::string error;
+                    if (renderer_->use_or_equip_item(
+                            core_->inventory[selected_inventory_index_].id, error,
+                            selected_equipment_slot_)) {
+                        action = HUD_ACTION_STATE_CHANGED;
+                        selected_inventory_index_ = -1;
+                        selected_equipment_slot_ = -1;
+                        notice_ = renderer_->interaction_message();
+                    } else {
+                        notice_ = error;
+                    }
+                    return true;
+                }
+                if (selected_equipment_slot_ >= 0
+                        && selected_equipment_slot_ < GAME_CORE_EQUIPMENT_SLOTS) {
+                    std::string error;
+                    if (renderer_->unequip_equipment(
+                            static_cast<GameCoreEquipmentSlot>(
+                                selected_equipment_slot_), error)) {
+                        action = HUD_ACTION_STATE_CHANGED;
+                        selected_equipment_slot_ = -1;
+                        notice_ = renderer_->interaction_message();
+                    } else {
+                        notice_ = error;
+                    }
+                    return true;
+                }
+                if (selected_inventory_index_ < 0
+                        || static_cast<std::size_t>(selected_inventory_index_)
+                            >= core_->inventory_count) {
+                    const std::vector<int> visible = filtered_inventory_indices();
+                    if (visible.empty()) {
+                        notice_ = "Inventory is empty.";
+                        return true;
+                    }
+                    selected_inventory_index_ = visible[std::min(
+                        static_cast<std::size_t>(inventory_scroll_),
+                        visible.size() - 1)];
+                }
+                std::string error;
+                if (renderer_->use_or_equip_item(
+                        core_->inventory[selected_inventory_index_].id, error)) {
+                    action = HUD_ACTION_STATE_CHANGED;
+                    selected_inventory_index_ = -1;
+                    selected_equipment_slot_ = -1;
+                    notice_ = renderer_->interaction_message();
+                } else {
+                    notice_ = error;
+                }
             }
         } else if (hero_tab_ == 1) {
             if (keys_down & KEY_UP) quest_scroll_ = std::max(0, quest_scroll_ - 1);
@@ -374,13 +659,7 @@ void HudView::draw() const
         draw_text("Original visited-map tiles are not bundled yet.",
             12.0f, 42.0f, 0.34f, PANEL_TEXT, true);
         draw_text("B: back", 12.0f, 220.0f, 0.3f, PANEL_TEXT);
-    } else {
-        draw_panel(4.0f, 4.0f, 312.0f, 232.0f);
-        draw_text("Quick items", 12.0f, 12.0f, 0.42f, PANEL_TEXT);
-        draw_text("Quick-slot actions are not ported yet.",
-            12.0f, 42.0f, 0.34f, PANEL_TEXT, true);
-        draw_text("B: back", 12.0f, 220.0f, 0.3f, PANEL_TEXT);
-    }
+    } else draw_quick_items();
 }
 
 void HudView::draw_interaction(const char *text) const
@@ -388,6 +667,37 @@ void HudView::draw_interaction(const char *text) const
     if (text == NULL || text[0] == '\0') return;
     draw_nine_patch(ICON_STD_FRAME, 8.0f, 92.0f, 384.0f, 140.0f);
     draw_text(text, 18.0f, 103.0f, 0.42f, PANEL_TEXT, true, 364.0f);
+}
+
+void HudView::draw_combat_overlay() const
+{
+    if (renderer_ == NULL || !renderer_->is_in_combat()) return;
+
+    draw_nine_patch(ICON_STD_FRAME, 8.0f, 8.0f, 384.0f, 36.0f);
+    draw_text("AP:", 18.0f, 19.0f, 0.29f, PANEL_TEXT);
+    const int player_ap = renderer_->displayed_player_action_points();
+    draw_bar(53.0f, 20.0f, 325.0f, player_ap,
+        renderer_->maximum_player_action_points(), ICON_COMBAT_BLUE_FOREGROUND);
+    char value[32];
+    std::snprintf(value, sizeof(value), "%d / %d",
+        player_ap,
+        renderer_->maximum_player_action_points());
+    draw_text(value, 190.0f, 16.0f, 0.26f, PANEL_TEXT);
+
+    std::string target_name;
+    int target_health = 0;
+    int target_maximum_health = 0;
+    if (!renderer_->selected_combat_target(target_name, target_health,
+            target_maximum_health)) return;
+
+    draw_nine_patch(ICON_STD_FRAME, 8.0f, 46.0f, 384.0f, 40.0f);
+    renderer_->draw_selected_combat_target_icon(12.0f, 50.0f, 0.35f);
+    draw_text("HP:", 49.0f, 59.0f, 0.29f, PANEL_TEXT);
+    draw_bar(84.0f, 58.0f, 294.0f, target_health,
+        target_maximum_health, ICON_COMBAT_RED_FOREGROUND);
+    std::snprintf(value, sizeof(value), "%d / %d", target_health,
+        target_maximum_health);
+    draw_text(value, 211.0f, 55.0f, 0.26f, PANEL_TEXT);
 }
 
 void HudView::draw_status() const
@@ -421,12 +731,39 @@ void HudView::draw_status() const
         : &quickslot_closed_;
     C2D_DrawImageAt(toolbox, 280.0f, 8.0f, 0.5f, NULL);
     if (toolbox_open_) draw_toolbox();
-    else if (!notice_.empty()) draw_text(notice_.c_str(), 45.0f, 50.0f, 0.32f,
+    else if (renderer_->is_in_combat()) {
+        std::string target_name;
+        int target_health = 0;
+        int target_maximum_health = 0;
+        const bool has_target = renderer_->selected_combat_target(target_name,
+            target_health, target_maximum_health);
+        draw_panel(42.0f, 47.0f, 236.0f, 47.0f);
+        char action_points[80];
+        std::snprintf(action_points, sizeof(action_points),
+            "Combat AP: %d  A: %s  B: end turn",
+            renderer_->player_action_points(), has_target ? "attack" : "end combat");
+        draw_text(action_points, 48.0f, 50.0f, 0.29f,
+            C2D_Color32(255, 210, 120, 255));
+        if (has_target) {
+            char target[96];
+            std::snprintf(target, sizeof(target), "%s  L/R: target",
+                target_name.c_str());
+            draw_text(target, 48.0f, 64.0f, 0.29f, PANEL_TEXT);
+        } else {
+            draw_text("No adjacent target  L/R: select", 48.0f, 67.0f, 0.27f,
+                PANEL_TEXT);
+        }
+    } else if (!notice_.empty()) draw_text(notice_.c_str(), 45.0f, 50.0f, 0.32f,
         C2D_Color32(255, 210, 120, 255));
 }
 
 void HudView::draw_hero_info() const
 {
+    combat::PlayerCombatStats player_stats;
+    std::string stats_error;
+    const bool stats_valid = combat::player_combat_stats(
+        resources_, core_, player_stats, stats_error
+    );
     draw_nine_patch(ICON_TAB_FRAME, 0.0f, 0.0f, 320.0f, 240.0f);
     draw_nine_patch(ICON_TAB_TOP_OVERLAY, 0.0f, 0.0f, 320.0f, 24.0f);
     const char *const tabs[] = {"Overview", "Quests", "Skills", "Items"};
@@ -452,9 +789,10 @@ void HudView::draw_hero_info() const
         std::snprintf(line, sizeof(line), "Total experience: %d", core_->total_experience);
         draw_text(line, 48.0f, 67.0f, 0.29f, PANEL_TEXT);
         std::snprintf(line, sizeof(line), "Health points (HP): %d/%d",
-            core_->health, core_->max_health);
+            core_->health, stats_valid ? player_stats.maximum_health : core_->max_health);
         draw_text(line, 9.0f, 91.0f, 0.29f, PANEL_TEXT);
-        draw_bar(134.0f, 91.0f, 172.0f, core_->health, core_->max_health,
+        draw_bar(134.0f, 91.0f, 172.0f, core_->health,
+            stats_valid ? player_stats.maximum_health : core_->max_health,
             ICON_RED_FOREGROUND);
         const int next_level = game_core_experience_for_next_level(core_->level);
         const int current_xp = game_core_experience_in_current_level(core_);
@@ -465,17 +803,25 @@ void HudView::draw_hero_info() const
             ICON_YELLOW_FOREGROUND);
         C2D_DrawRectSolid(5.0f, 127.0f, 0.4f, 310.0f, 1.0f, PANEL_BORDER);
         draw_text("Combat statistics (current)", 9.0f, 132.0f, 0.3f, PANEL_TEXT);
-        std::snprintf(line, sizeof(line), "Attack chance: %d%%", core_->attack_chance);
+        std::snprintf(line, sizeof(line), "Attack chance: %d%%",
+            stats_valid ? player_stats.attack_chance : core_->attack_chance);
         draw_text(line, 9.0f, 151.0f, 0.29f, PANEL_TEXT);
-        std::snprintf(line, sizeof(line), "Attack damage: %d HP", core_->attack_damage);
+        std::snprintf(line, sizeof(line), "Attack damage: %d-%d HP",
+            stats_valid ? player_stats.minimum_damage : core_->attack_damage,
+            stats_valid ? player_stats.maximum_damage : core_->attack_damage);
         draw_text(line, 164.0f, 151.0f, 0.29f, PANEL_TEXT);
-        std::snprintf(line, sizeof(line), "Block chance: %d%%", core_->block_chance);
+        std::snprintf(line, sizeof(line), "Block chance: %d%%",
+            stats_valid ? player_stats.block_chance : core_->block_chance);
         draw_text(line, 9.0f, 169.0f, 0.29f, PANEL_TEXT);
         std::snprintf(line, sizeof(line), "Skill points: %d", core_->skill_points);
         draw_text(line, 164.0f, 169.0f, 0.29f, PANEL_TEXT);
         if (game_core_can_level_up(core_)) {
             draw_panel(79.0f, 192.0f, 162.0f, 30.0f);
             draw_text("Level up", 132.0f, 201.0f, 0.29f, PANEL_TEXT);
+        }
+        if (!stats_valid) {
+            draw_text(stats_error.c_str(), 9.0f, 183.0f, 0.24f,
+                C2D_Color32(255, 160, 140, 255), true, 300.0f);
         }
     } else if (hero_tab_ == 1) {
         draw_panel(3.0f, 47.0f, 314.0f, 190.0f);
@@ -562,7 +908,7 @@ void HudView::draw_hero_info() const
                 C2D_Color32(255, 210, 120, 255), true, 300.0f);
         }
     } else {
-        draw_panel(3.0f, 47.0f, 314.0f, 84.0f);
+        draw_panel(3.0f, 47.0f, 314.0f, 76.0f);
         draw_text("Worn equipment", 8.0f, 49.0f, 0.24f, PANEL_TEXT);
         const Icon equipment_slots[] = {
             ICON_EQUIP_HEAD, ICON_EQUIP_BODY, ICON_EQUIP_NECK,
@@ -570,47 +916,93 @@ void HudView::draw_hero_info() const
             ICON_EQUIP_SHIELD, ICON_EQUIP_RING,
             ICON_EQUIP_HAND, ICON_EQUIP_FEET
         };
-        const float slot_x[] = {78.0f, 101.0f, 124.0f, 39.0f, 62.0f,
-            148.0f, 125.0f, 78.0f, 101.0f};
-        const float slot_y[] = {53.0f, 53.0f, 53.0f, 74.0f, 96.0f,
-            74.0f, 96.0f, 111.0f, 111.0f};
+        const float slot_x[] = {61.0f, 84.0f, 107.0f, 24.0f, 24.0f,
+            147.0f, 147.0f, 61.0f, 84.0f};
+        const float slot_y[] = {53.0f, 53.0f, 53.0f, 76.0f, 98.0f,
+            76.0f, 98.0f, 98.0f, 98.0f};
+        const GameCoreEquipmentSlot slot_ids[] = {
+            GAME_CORE_EQUIP_HEAD, GAME_CORE_EQUIP_BODY, GAME_CORE_EQUIP_NECK,
+            GAME_CORE_EQUIP_WEAPON, GAME_CORE_EQUIP_LEFT_RING,
+            GAME_CORE_EQUIP_SHIELD, GAME_CORE_EQUIP_RIGHT_RING,
+            GAME_CORE_EQUIP_HAND, GAME_CORE_EQUIP_FEET
+        };
         for (int slot = 0; slot < 9; ++slot) {
+            if (slot_ids[slot] == selected_equipment_slot_) {
+                C2D_DrawRectSolid(slot_x[slot] - 1.0f, slot_y[slot] - 1.0f,
+                    0.25f, 19.0f, 19.0f, C2D_Color32(255, 210, 120, 255));
+            }
             C2D_DrawImageAt(images_[ICON_EQUIP_SQUARE], slot_x[slot],
                 slot_y[slot], 0.3f, NULL, 1.15f, 1.15f);
-            C2D_DrawImageAt(images_[equipment_slots[slot]], slot_x[slot] + 1.0f,
-                slot_y[slot] + 1.0f, 0.2f, NULL, 0.55f, 0.55f);
+            const char *equipped_item = game_core_equipped_item(core_,
+                slot_ids[slot]);
+            if (equipped_item != NULL && equipped_item[0] != '\0') {
+                draw_item_icon(equipped_item, slot_x[slot] + 2.0f,
+                    slot_y[slot] + 2.0f);
+            } else {
+                C2D_DrawImageAt(images_[equipment_slots[slot]],
+                    slot_x[slot] + 1.0f, slot_y[slot] + 1.0f, 0.2f,
+                    NULL, 0.55f, 0.55f);
+            }
         }
-        C2D_DrawImageAt(images_[ICON_HERO_LARGE], 87.0f, 77.0f, 0.3f,
+        C2D_DrawImageAt(images_[ICON_HERO_LARGE], 81.0f, 76.0f, 0.3f,
             NULL, 1.0f, 1.0f);
-        draw_panel(174.0f, 55.0f, 139.0f, 20.0f);
-        C2D_DrawImageAt(images_[ICON_COINS], 176.0f, 57.0f, 0.3f,
+        draw_panel(180.0f, 51.0f, 133.0f, 22.0f);
+        C2D_DrawImageAt(images_[ICON_COINS], 182.0f, 53.0f, 0.3f,
             NULL, 0.55f, 0.55f);
         char line[80];
         std::snprintf(line, sizeof(line), "Gold: %d", core_->gold);
-        draw_text(line, 196.0f, 60.0f, 0.25f, PANEL_TEXT);
-        draw_panel(174.0f, 78.0f, 139.0f, 20.0f);
-        C2D_DrawImageAt(images_[ICON_EQUIP_WEAPON], 176.0f, 80.0f,
+        draw_text(line, 202.0f, 55.0f, 0.25f, PANEL_TEXT);
+        draw_panel(180.0f, 77.0f, 133.0f, 22.0f);
+        C2D_DrawImageAt(images_[ICON_EQUIP_WEAPON], 182.0f, 79.0f,
             0.3f, NULL, 0.55f, 0.55f);
-        std::snprintf(line, sizeof(line), "Attack: %d%%  %d",
-            core_->attack_chance, core_->attack_damage);
-        draw_text(line, 196.0f, 83.0f, 0.25f, PANEL_TEXT);
-        draw_panel(174.0f, 101.0f, 139.0f, 20.0f);
-        C2D_DrawImageAt(images_[ICON_EQUIP_SHIELD], 176.0f, 103.0f,
+        std::snprintf(line, sizeof(line), "Attack: %d%%  %d-%d",
+            stats_valid ? player_stats.attack_chance : core_->attack_chance,
+            stats_valid ? player_stats.minimum_damage : core_->attack_damage,
+            stats_valid ? player_stats.maximum_damage : core_->attack_damage);
+        draw_text(line, 202.0f, 81.0f, 0.25f, PANEL_TEXT);
+        draw_panel(180.0f, 103.0f, 133.0f, 22.0f);
+        C2D_DrawImageAt(images_[ICON_EQUIP_SHIELD], 182.0f, 105.0f,
             0.3f, NULL, 0.55f, 0.55f);
-        std::snprintf(line, sizeof(line), "Defense: %d", core_->block_chance);
-        draw_text(line, 196.0f, 106.0f, 0.25f, PANEL_TEXT);
+        std::snprintf(line, sizeof(line), "Defense: %d",
+            stats_valid ? player_stats.block_chance : core_->block_chance);
+        draw_text(line, 202.0f, 107.0f, 0.25f, PANEL_TEXT);
 
-        draw_panel(3.0f, 134.0f, 314.0f, 103.0f);
-        draw_text("Inventory", 8.0f, 137.0f, 0.26f, PANEL_TEXT);
-        const int maximum_scroll = static_cast<int>(
-            core_->inventory_count > 4 ? core_->inventory_count - 4 : 0);
+        draw_panel(3.0f, 126.0f, 314.0f, 111.0f);
+        draw_text("Inventory", 8.0f, 128.0f, 0.26f, PANEL_TEXT);
+        if (!notice_.empty()) {
+            draw_text(notice_.c_str(), 75.0f, 129.0f, 0.18f,
+                C2D_Color32(255, 210, 120, 255));
+        }
+        static const char *const category_names[] = {
+            "All", "Weapons", "Armor", "Jewelry",
+            "Potions", "Food", "Quest", "Other"
+        };
+        static const char *const sort_names[] = {
+            "Custom", "Name", "Price", "Quantity", "Rarity", "Type"
+        };
+        draw_panel(5.0f, 138.0f, 151.0f, 15.0f);
+        draw_panel(162.0f, 138.0f, 153.0f, 15.0f);
+        char filter_label[48];
+        std::snprintf(filter_label, sizeof(filter_label), "Filter: %s",
+            category_names[inventory_category_]);
+        draw_text(filter_label, 8.0f, 140.0f, 0.20f, PANEL_TEXT);
+        std::snprintf(filter_label, sizeof(filter_label), "Sort: %s",
+            sort_names[inventory_sort_]);
+        draw_text(filter_label, 166.0f, 140.0f, 0.20f, PANEL_TEXT);
+
+        const std::vector<int> visible = filtered_inventory_indices();
+        const int maximum_scroll = visible.size() > 4
+            ? static_cast<int>(visible.size() - 4) : 0;
         const std::size_t start = static_cast<std::size_t>(
-            std::min(inventory_scroll_, maximum_scroll)
-        );
-        const std::size_t end = std::min(core_->inventory_count, start + 4);
-        int y = 151;
-        for (std::size_t index = start; index < end; ++index, y += 20) {
-            draw_panel(5.0f, static_cast<float>(y), 310.0f, 19.0f);
+            std::min(inventory_scroll_, maximum_scroll));
+        const std::size_t end = std::min(visible.size(), start + 4);
+        int y = 154;
+        for (std::size_t position = start; position < end; ++position, y += 18) {
+            const int index = visible[position];
+            if (index == selected_inventory_index_) {
+                C2D_DrawRectSolid(5.0f, static_cast<float>(y), 0.4f, 310.0f,
+                    17.0f, C2D_Color32(77, 70, 50, 255));
+            }
             const std::string &item_id = core_->inventory[index].id;
             std::map<std::string, std::string>::iterator cached =
                 item_name_cache_.find(item_id);
@@ -618,17 +1010,37 @@ void HudView::draw_hero_info() const
                 std::string name;
                 std::string error;
                 if (!items::item_name(resources_, item_id, name, error)) {
-                    name = item_id + " (name unavailable)";
+                    name = std::string(item_id) + " (name unavailable)";
                 }
                 cached = item_name_cache_.insert(std::make_pair(item_id, name)).first;
             }
-            draw_item_icon(item_id, 7.0f, static_cast<float>(y - 1));
-            std::snprintf(line, sizeof(line), "%s x%d",
-                cached->second.c_str(), core_->inventory[index].value);
-            draw_text(line, 31.0f, static_cast<float>(y + 4), 0.25f, PANEL_TEXT);
+            draw_item_icon(item_id, 7.0f, static_cast<float>(y - 2));
+            if (core_->inventory[index].value > 1) {
+                std::snprintf(line, sizeof(line), "%s (%d)",
+                    cached->second.c_str(), core_->inventory[index].value);
+            } else {
+                std::snprintf(line, sizeof(line), "%s", cached->second.c_str());
+            }
+            draw_text(line, 31.0f, static_cast<float>(y + 3), 0.28f, PANEL_TEXT);
+            C2D_DrawRectSolid(7.0f, static_cast<float>(y + 17), 0.4f,
+                306.0f, 0.5f, PANEL_BORDER);
         }
-        if (core_->inventory_count == 0) draw_text("Inventory is empty.", 9.0f, 157.0f,
-            0.27f, PANEL_TEXT);
+        if (!inventory_error_.empty()) {
+            draw_text(inventory_error_.c_str(), 8.0f, 155.0f, 0.20f,
+                C2D_Color32(255, 160, 140, 255), true, 300.0f);
+        } else if (visible.empty()) {
+            draw_text("No items in this category.", 8.0f, 155.0f, 0.22f, PANEL_TEXT);
+        }
+        const char *inventory_hint = "Tap item or worn slot to select";
+        if (selected_inventory_index_ >= 0
+                && selected_equipment_slot_ >= 0) {
+            inventory_hint = "A: equip selected item in selected slot";
+        } else if (selected_inventory_index_ >= 0) {
+            inventory_hint = "A: use/equip selected item";
+        } else if (selected_equipment_slot_ >= 0) {
+            inventory_hint = "A: remove selected worn item";
+        }
+        draw_text(inventory_hint, 8.0f, 228.0f, 0.22f, PANEL_TEXT);
     }
 }
 
@@ -662,6 +1074,81 @@ void HudView::draw_level_up() const
         C2D_Color32(190, 190, 190, 255));
 }
 
+void HudView::draw_quick_items() const
+{
+    draw_panel(4.0f, 4.0f, 312.0f, 232.0f);
+    draw_text("Quick items", 12.0f, 10.0f, 0.42f, PANEL_TEXT);
+    char line[128];
+    for (int slot = 0; slot < GAME_CORE_QUICK_SLOTS; ++slot) {
+        const float y = 40.0f + slot * 22.0f;
+        draw_panel(8.0f, y, 304.0f, 20.0f);
+        if (slot == selected_quick_slot_) {
+            C2D_DrawRectSolid(8.0f, y, 0.4f, 304.0f, 20.0f,
+                C2D_Color32(77, 70, 50, 255));
+        }
+        std::snprintf(line, sizeof(line), "Slot %d:", slot + 1);
+        draw_text(line, 14.0f, y + 4.0f, 0.26f, PANEL_TEXT);
+        const char *item_id = game_core_quick_item(core_,
+            static_cast<std::size_t>(slot));
+        if (item_id == NULL) {
+            draw_text("Empty", 75.0f, y + 4.0f, 0.26f, PANEL_TEXT);
+            continue;
+        }
+        draw_item_icon(item_id, 72.0f, y - 2.0f);
+        std::map<std::string, std::string>::iterator cached =
+            item_name_cache_.find(item_id);
+        if (cached == item_name_cache_.end()) {
+            std::string name;
+            std::string error;
+            if (!items::item_name(resources_, item_id, name, error)) {
+                name = std::string(item_id) + " (name unavailable)";
+            }
+            cached = item_name_cache_.insert(std::make_pair(item_id, name)).first;
+        }
+        std::snprintf(line, sizeof(line), "%s x%d",
+            cached->second.c_str(), game_core_inventory_count(core_, item_id));
+        draw_text(line, 94.0f, y + 4.0f, 0.25f, PANEL_TEXT);
+    }
+
+    draw_text("Inventory items (tap/Y assigns)", 12.0f, 110.0f, 0.26f, PANEL_TEXT);
+    const int maximum_scroll = core_->inventory_count > 6
+        ? static_cast<int>(core_->inventory_count - 6) : 0;
+    const std::size_t start = static_cast<std::size_t>(
+        std::min(inventory_scroll_, maximum_scroll));
+    const std::size_t end = std::min(core_->inventory_count, start + 6);
+    for (std::size_t index = start; index < end; ++index) {
+        const float y = 123.0f + static_cast<float>(index - start) * 16.0f;
+        if (static_cast<int>(index) == selected_inventory_index_) {
+            C2D_DrawRectSolid(8.0f, y, 0.4f, 304.0f, 16.0f,
+                C2D_Color32(77, 70, 50, 255));
+        } else {
+            draw_panel(8.0f, y, 304.0f, 16.0f);
+        }
+        const std::string &item_id = core_->inventory[index].id;
+        draw_item_icon(item_id, 9.0f, y - 4.0f);
+        std::map<std::string, std::string>::iterator cached =
+            item_name_cache_.find(item_id);
+        if (cached == item_name_cache_.end()) {
+            std::string name;
+            std::string error;
+            if (!items::item_name(resources_, item_id, name, error)) {
+                name = item_id + " (name unavailable)";
+            }
+            cached = item_name_cache_.insert(std::make_pair(item_id, name)).first;
+        }
+        std::snprintf(line, sizeof(line), "%s x%d",
+            cached->second.c_str(), core_->inventory[index].value);
+        draw_text(line, 31.0f, y + 3.0f, 0.22f, PANEL_TEXT);
+    }
+    if (!notice_.empty()) {
+        draw_text(notice_.c_str(), 10.0f, 222.0f, 0.22f,
+            C2D_Color32(255, 210, 120, 255), true, 300.0f);
+    } else {
+        draw_text("Left/Right: slot  Up/Down: item  A: use  B: back",
+            10.0f, 222.0f, 0.2f, PANEL_TEXT);
+    }
+}
+
 void HudView::draw_toolbox() const
 {
     draw_panel(267.0f, 43.0f, 53.0f, 168.0f);
@@ -670,6 +1157,111 @@ void HudView::draw_toolbox() const
         C2D_DrawImageAt(images_[icons[index]], 277.0f,
             47.0f + index * 40.0f, 0.5f, NULL);
     }
+}
+
+bool HudView::inventory_properties(const std::string &item_id,
+    items::InventoryProperties &properties) const
+{
+    std::map<std::string, items::InventoryProperties>::const_iterator cached =
+        item_properties_cache_.find(item_id);
+    if (cached != item_properties_cache_.end()) {
+        properties = cached->second;
+        return true;
+    }
+
+    std::string error;
+    if (!items::item_inventory_properties(resources_, item_id, properties, error)) {
+        inventory_error_ = error;
+        return false;
+    }
+    item_properties_cache_.insert(std::make_pair(item_id, properties));
+    return true;
+}
+
+std::vector<int> HudView::filtered_inventory_indices() const
+{
+    struct Entry {
+        int index;
+        std::string name;
+        items::InventoryProperties properties;
+    };
+
+    static const items::InventoryGroup groups[] = {
+        items::INVENTORY_GROUP_WEAPON,
+        items::INVENTORY_GROUP_ARMOR,
+        items::INVENTORY_GROUP_JEWELRY,
+        items::INVENTORY_GROUP_POTION,
+        items::INVENTORY_GROUP_FOOD,
+        items::INVENTORY_GROUP_QUEST,
+        items::INVENTORY_GROUP_OTHER
+    };
+
+    inventory_error_.clear();
+    std::vector<Entry> entries;
+    for (std::size_t index = 0; index < core_->inventory_count; ++index) {
+        Entry entry;
+        entry.index = static_cast<int>(index);
+        const std::string &item_id = core_->inventory[index].id;
+        if (!inventory_properties(item_id, entry.properties)) return std::vector<int>();
+        if (inventory_category_ != 0
+                && entry.properties.group != groups[inventory_category_ - 1]) {
+            continue;
+        }
+
+        std::map<std::string, std::string>::const_iterator name =
+            item_name_cache_.find(item_id);
+        if (name == item_name_cache_.end()) {
+            std::string item_name;
+            std::string error;
+            if (!items::item_name(resources_, item_id, item_name, error)) {
+                inventory_error_ = error;
+                return std::vector<int>();
+            }
+            name = item_name_cache_.insert(std::make_pair(item_id, item_name)).first;
+        }
+        entry.name = name->second;
+        entries.push_back(entry);
+    }
+
+    if (inventory_sort_ != 0) {
+        std::stable_sort(entries.begin(), entries.end(),
+            [this](const Entry &left, const Entry &right) {
+                switch (inventory_sort_) {
+                case 1:
+                    return left.name < right.name;
+                case 2:
+                    if (left.properties.market_cost != right.properties.market_cost) {
+                        return left.properties.market_cost > right.properties.market_cost;
+                    }
+                    return left.name < right.name;
+                case 3: {
+                    const int left_quantity = core_->inventory[left.index].value;
+                    const int right_quantity = core_->inventory[right.index].value;
+                    if (left_quantity != right_quantity) {
+                        return left_quantity > right_quantity;
+                    }
+                    return left.name < right.name;
+                }
+                case 4:
+                    if (left.properties.rarity_order != right.properties.rarity_order) {
+                        return left.properties.rarity_order > right.properties.rarity_order;
+                    }
+                    return left.name < right.name;
+                case 5:
+                    if (left.properties.type_order != right.properties.type_order) {
+                        return left.properties.type_order < right.properties.type_order;
+                    }
+                    return left.name < right.name;
+                default:
+                    return false;
+                }
+            });
+    }
+
+    std::vector<int> indices;
+    indices.reserve(entries.size());
+    for (const Entry &entry : entries) indices.push_back(entry.index);
+    return indices;
 }
 
 void HudView::refresh_quest_log() const
@@ -829,15 +1421,21 @@ void HudView::draw_bar(float x, float y, float width, int current, int maximum,
     if (current <= 0 || maximum <= 0) return;
 
     const float fraction = std::min(1.0f, static_cast<float>(current) / maximum);
-    Tex3DS_SubTexture clipped = foreground == ICON_RED_FOREGROUND
-        ? bar_red_ : bar_yellow_;
+    const Tex3DS_SubTexture *foreground_texture = &bar_yellow_;
+    if (foreground == ICON_RED_FOREGROUND) foreground_texture = &bar_red_;
+    else if (foreground == ICON_COMBAT_RED_FOREGROUND) {
+        foreground_texture = &combat_bar_red_;
+    } else if (foreground == ICON_COMBAT_BLUE_FOREGROUND) {
+        foreground_texture = &combat_bar_blue_;
+    }
+    Tex3DS_SubTexture clipped = *foreground_texture;
     clipped.right = clipped.left + (clipped.right - clipped.left) * fraction;
     clipped.width = std::max<unsigned int>(1,
         static_cast<unsigned int>(clipped.width * fraction));
     C2D_Image fill = images_[foreground];
     fill.subtex = &clipped;
     C2D_DrawImageAt(fill, x, y, 0.5f, NULL,
-        width / (foreground == ICON_RED_FOREGROUND ? bar_red_.width : bar_yellow_.width),
+        width / foreground_texture->width,
         12.0f / clipped.height);
 }
 

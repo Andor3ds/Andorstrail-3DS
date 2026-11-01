@@ -153,12 +153,14 @@ bool level_up(GameCore *core, const Definition &definition)
 
 CombatBonuses combat_bonuses(const GameCore *core)
 {
-    CombatBonuses bonuses = {0, 0, 0, 0};
+    CombatBonuses bonuses = {0, 0, 0, 0, 0, 0};
     if (core == NULL || core->skill_count > GAME_CORE_MAX_VALUES) return bonuses;
     bonuses.attack_chance = scaled_bonus(core, "weaponChance", 12);
     bonuses.maximum_damage = scaled_bonus(core, "weaponDmg", 2);
     bonuses.block_chance = scaled_bonus(core, "dodge", 9);
     bonuses.damage_resistance = scaled_bonus(core, "barkSkin", 1);
+    bonuses.critical_skill_percent = scaled_bonus(core, "moreCriticals", 20);
+    bonuses.critical_multiplier_percent = scaled_bonus(core, "betterCriticals", 25);
     return bonuses;
 }
 

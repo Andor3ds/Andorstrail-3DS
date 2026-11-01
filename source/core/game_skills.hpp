@@ -31,6 +31,8 @@ struct CombatBonuses {
     int maximum_damage;
     int block_chance;
     int damage_resistance;
+    int critical_skill_percent;
+    int critical_multiplier_percent;
 };
 
 const Definition *visible_definitions(std::size_t &count);

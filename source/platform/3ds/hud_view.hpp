@@ -2,6 +2,7 @@
 #define ANDORSTRAIL_3DS_HUD_VIEW_HPP
 
 #include "game_core.h"
+#include "game_items.hpp"
 #include "game_quest_log.hpp"
 #include "game_skills.hpp"
 #include "map_renderer.hpp"
@@ -36,6 +37,7 @@ public:
     void set_combat_message(const std::string &message);
     void set_notice(const std::string &message);
     void draw() const;
+    void draw_combat_overlay() const;
     void draw_interaction(const char *text) const;
 
 private:
@@ -50,6 +52,8 @@ private:
 
     enum Icon {
         ICON_BAR_BACKGROUND,
+        ICON_COMBAT_RED_FOREGROUND,
+        ICON_COMBAT_BLUE_FOREGROUND,
         ICON_COMBAT,
         ICON_EQUIPMENT,
         ICON_MAP,
@@ -88,8 +92,12 @@ private:
     void draw_status() const;
     void draw_hero_info() const;
     void draw_level_up() const;
+    void draw_quick_items() const;
     void draw_toolbox() const;
     void refresh_quest_log() const;
+    std::vector<int> filtered_inventory_indices() const;
+    bool inventory_properties(const std::string &item_id,
+        items::InventoryProperties &properties) const;
     void draw_panel(float x, float y, float width, float height) const;
     void draw_nine_patch(Icon icon, float x, float y, float width,
         float height) const;
@@ -111,18 +119,27 @@ private:
     mutable Tex3DS_SubTexture selection_yellow_;
     mutable Tex3DS_SubTexture bar_background_;
     mutable Tex3DS_SubTexture bar_red_;
+    mutable Tex3DS_SubTexture combat_bar_red_;
+    mutable Tex3DS_SubTexture combat_bar_blue_;
     mutable Tex3DS_SubTexture bar_yellow_;
     Screen screen_;
     int hero_tab_;
     int selected_level_up_;
     int inventory_scroll_;
+    int selected_inventory_index_;
+    int inventory_category_;
+    int inventory_sort_;
+    int selected_quick_slot_;
+    int selected_equipment_slot_;
     mutable int quest_scroll_;
     int skill_scroll_;
     bool toolbox_open_;
     std::string combat_message_;
     std::string notice_;
     mutable std::map<std::string, std::string> item_name_cache_;
+    mutable std::map<std::string, items::InventoryProperties> item_properties_cache_;
     mutable std::map<std::string, std::pair<int, unsigned int> > item_icon_cache_;
+    mutable std::string inventory_error_;
     mutable bool quest_log_dirty_;
     mutable std::vector<GameCoreValue> quest_snapshot_;
     mutable std::vector<quest_log::Entry> quest_entries_;

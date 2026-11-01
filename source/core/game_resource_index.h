@@ -1,6 +1,6 @@
 #ifndef ANDORSTRAIL_GAME_RESOURCE_INDEX_H
 #define ANDORSTRAIL_GAME_RESOURCE_INDEX_H
-#define GAME_RESOURCE_SOURCE_COMMIT "0dfa1f63ea6d944df2c6d34e641000c09d3e917e"
+#define GAME_RESOURCE_SOURCE_COMMIT "8b91a68bc3dc14181c5f0d89da781dfe5be87b09"
 #include "game_resources.h"
 extern const GameResourceDocumentEntry game_resource_documents[];
 extern const size_t game_resource_document_count;

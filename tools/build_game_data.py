@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-SOURCE_COMMIT = "0dfa1f63ea6d944df2c6d34e641000c09d3e917e"
+SOURCE_COMMIT = "8b91a68bc3dc14181c5f0d89da781dfe5be87b09"
 RESOURCE_ARRAYS = (
     ("loadresource_items", "GAME_RESOURCE_ITEM"),
     ("loadresource_monsters", "GAME_RESOURCE_MONSTER"),

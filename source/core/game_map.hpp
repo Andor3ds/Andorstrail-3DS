@@ -261,6 +261,10 @@ const Property *find_property(const std::vector<Property> &properties, const std
 const Layer *find_layer(const Document &document, const std::string &name);
 bool resolve_tile_source(const Document &document, std::uint32_t gid, TileSource &source);
 bool is_walkable(const Document &document, int x, int y);
+bool is_adjacent(GridPosition first, GridPosition second);
+bool find_path_step(const Document &document, GridPosition from,
+    GridPosition destination, const std::function<bool(GridPosition)> &can_enter,
+    GridPosition &next_step);
 bool move_player(const Document &document, GridPosition &position, int dx, int dy);
 GridPosition step_toward(GridPosition position, GridPosition destination);
 bool resolve_map_transition(

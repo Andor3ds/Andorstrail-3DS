@@ -31,6 +31,27 @@ static void write_version_three_save(const char *path)
     assert(fclose(file) == 0);
 }
 
+static void write_version_four_save(const char *path)
+{
+    FILE *file = fopen(path, "wb");
+    assert(file != NULL);
+    assert(fputs("ANDORTRAIL_SAVE 4\ngold 9\nhealth 25\nmax_health 25\nlevel 1\n"
+        "experience 1\nattack_chance 60\nattack_damage 1\nblock_chance 0\n"
+        "skill_points 0\nrandom 2654435769\nskill weaponChance 2\n", file) >= 0);
+    assert(fclose(file) == 0);
+}
+
+static void write_version_five_save(const char *path)
+{
+    FILE *file = fopen(path, "wb");
+    assert(file != NULL);
+    assert(fputs("ANDORTRAIL_SAVE 5\ngold 9\nhealth 25\nmax_health 25\n"
+        "level 1\nexperience 1\nattack_chance 60\nattack_damage 1\n"
+        "block_chance 0\ncritical_skill 0\ncritical_multiplier 1\n"
+        "skill_points 0\nrandom 2654435769\n", file) >= 0);
+    assert(fclose(file) == 0);
+}
+
 static void write_duplicate_skill_save(const char *path)
 {
     FILE *file = fopen(path, "wb");
@@ -40,9 +61,66 @@ static void write_duplicate_skill_save(const char *path)
     assert(fclose(file) == 0);
 }
 
+static void test_scoped_map_encounter_reset(void)
+{
+    GameCore core;
+    game_core_init(&core);
+    assert(game_core_set_map_state(&core, "stale_map", 100, true));
+    assert(game_core_set_map_state(&core, "other_map", 200, true));
+
+    GameCoreSavedEnemy temporary = {0};
+    strcpy(temporary.instance_id, "temporary_enemy");
+    strcpy(temporary.monster_id, "rat");
+    temporary.health = 2;
+    GameCoreSavedEnemy unique = {0};
+    strcpy(unique.instance_id, "unique_enemy");
+    strcpy(unique.monster_id, "boss");
+    unique.health = 5;
+    unique.unique = true;
+    GameCoreSavedEnemy stale_enemies[] = {temporary, unique};
+    assert(game_core_set_map_enemies(&core, "stale_map", stale_enemies, 2));
+
+    GameCoreSavedEnemy other = {0};
+    strcpy(other.instance_id, "other_enemy");
+    strcpy(other.monster_id, "rat");
+    other.health = 2;
+    assert(game_core_set_map_enemies(&core, "other_map", &other, 1));
+
+    GameCoreCondition condition = {0};
+    strcpy(condition.id, "burn");
+    condition.magnitude = 1;
+    condition.duration = 4;
+    assert(game_core_set_enemy_conditions(&core, "stale_map",
+        "temporary_enemy", &condition, 1));
+    assert(game_core_set_enemy_conditions(&core, "stale_map",
+        "unique_enemy", &condition, 1));
+    assert(game_core_set_enemy_conditions(&core, "other_map",
+        "other_enemy", &condition, 1));
+
+    assert(game_core_reset_map_encounters_for_map(&core, "stale_map"));
+    uint64_t visit_time = 0;
+    bool visited = false;
+    assert(game_core_get_map_state(&core, "stale_map", &visit_time, &visited));
+    assert(visit_time == 0 && visited);
+    assert(game_core_get_map_state(&core, "other_map", &visit_time, &visited));
+    assert(visit_time == 200 && visited);
+    GameCoreSavedEnemy retained[2] = {};
+    assert(game_core_get_map_enemies(&core, "stale_map", retained, 2) == 1);
+    assert(strcmp(retained[0].instance_id, "unique_enemy") == 0);
+    assert(game_core_get_map_enemies(&core, "other_map", retained, 2) == 1);
+    assert(strcmp(retained[0].instance_id, "other_enemy") == 0);
+    assert(game_core_get_enemy_conditions(&core, "stale_map",
+        "temporary_enemy", NULL, 0) == 0);
+    assert(game_core_get_enemy_conditions(&core, "stale_map",
+        "unique_enemy", NULL, 0) == 1);
+    assert(game_core_get_enemy_conditions(&core, "other_map",
+        "other_enemy", NULL, 0) == 1);
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
+    test_scoped_map_encounter_reset();
     const char *save_path = argv[1];
     const size_t path_length = strlen(save_path);
     char *invalid_path = malloc(path_length + sizeof(".invalid"));
@@ -58,6 +136,7 @@ int main(int argc, char **argv)
     assert(core.total_experience == 1);
     assert(core.max_health == 25 && core.health == 25);
     assert(core.attack_chance == 60 && core.attack_damage == 1 && core.block_chance == 0);
+    assert(core.critical_skill == 0 && core.critical_multiplier == 1.0f);
     assert(game_core_experience_for_next_level(1) == 55);
     assert(game_core_experience_in_current_level(&core) == 1);
     int expected_total_experience = core.total_experience;
@@ -106,6 +185,28 @@ int main(int argc, char **argv)
     assert(game_core_skill_level(&core, "weaponChance") == 2);
     assert(!game_core_set_skill_level(&core, "invalid id", 1));
     assert(!game_core_set_skill_level(&core, "weaponChance", -1));
+    assert(game_core_set_equipped_item(&core, GAME_CORE_EQUIP_WEAPON, "training_sword"));
+    assert(!game_core_set_equipped_item(&core, GAME_CORE_EQUIP_WEAPON, "invalid item"));
+    assert(game_core_set_quick_item(&core, 1, "bread"));
+    assert(!game_core_set_quick_item(&core, GAME_CORE_QUICK_SLOTS, "bread"));
+    assert(!game_core_set_quick_item(&core, 0, "invalid item"));
+    assert(game_core_add_condition(&core, "poison_weak", 1, 2, true, false));
+    assert(game_core_add_condition(&core, "poison_weak", 2, 2, true, false));
+    assert(core.condition_count == 1 && core.conditions[0].magnitude == 3);
+    assert(game_core_add_condition(&core, "poison_weak", -99, 99, false, true));
+    assert(core.condition_count == 1 && core.conditions[0].immunity);
+    GameCoreCondition enemy_condition = {0};
+    strcpy(enemy_condition.id, "poison_weak");
+    enemy_condition.magnitude = 2;
+    enemy_condition.duration = 3;
+    assert(game_core_set_enemy_conditions(&core, "home", "mikhail_rat1",
+        &enemy_condition, 1));
+    assert(game_core_get_enemy_conditions(&core, "home", "mikhail_rat1",
+        NULL, 0) == 1);
+    assert(!game_core_set_enemy_conditions(&core, "home", "mikhail_rat1",
+        &enemy_condition, GAME_CORE_MAX_CONDITIONS + 1));
+    assert(game_core_set_enemy_conditions(&core, "home", "mikhail_rat1",
+        NULL, 0));
     assert(game_core_add_item(&core, "bread", 2));
     assert(game_core_add_item(&core, "bread", 1));
     assert(game_core_inventory_count(&core, "bread") == 3);
@@ -121,6 +222,34 @@ int main(int argc, char **argv)
     GameCore expected_state = core;
     const uint32_t random_after_load = game_core_random(&expected_state, 1000);
     core.gold = 24;
+    core.critical_skill = 21;
+    core.critical_multiplier = 1.75f;
+    core.enemy_spawn_sequence = 53;
+    assert(game_core_set_enemy_conditions(&core, "home", "mikhail_rat1",
+        &enemy_condition, 1));
+    assert(game_core_set_map_state(&core, "home", 123456789, true));
+    GameCoreSavedEnemy saved_enemy = {0};
+    strcpy(saved_enemy.instance_id, "enc_home_0");
+    strcpy(saved_enemy.monster_id, "trainingrat");
+    saved_enemy.spawn_area_index = 0;
+    saved_enemy.x = 7;
+    saved_enemy.y = 9;
+    saved_enemy.health = 4;
+    saved_enemy.action_points = 3;
+    GameCoreSavedEnemy unique_enemy = {0};
+    strcpy(unique_enemy.instance_id, "named_unique");
+    strcpy(unique_enemy.monster_id, "named_unique_type");
+    unique_enemy.spawn_area_index = 1;
+    unique_enemy.x = 12;
+    unique_enemy.y = 13;
+    unique_enemy.health = 8;
+    unique_enemy.action_points = 5;
+    unique_enemy.unique = true;
+    GameCoreSavedEnemy saved_enemies[] = {saved_enemy, unique_enemy};
+    assert(game_core_set_map_enemies(&core, "home", saved_enemies, 2));
+    assert(game_core_set_enemy_conditions(&core, "home", "enc_home_0",
+        &enemy_condition, 1));
+    assert(game_core_set_current_map(&core, "home", 7, 9));
     assert(game_core_save(&core, save_path));
 
     game_core_init(&core);
@@ -130,10 +259,52 @@ int main(int argc, char **argv)
     assert(core.level == 5 && core.total_experience == expected_total_experience);
     assert(core.max_health == 30 && core.attack_chance == 65);
     assert(core.attack_damage == 2 && core.block_chance == 3 && core.skill_points == 1);
+    assert(core.critical_skill == 21 && core.critical_multiplier == 1.75f);
+    assert(core.enemy_spawn_sequence == 53);
+    uint64_t last_visit_time_ms = 0;
+    bool map_visited = false;
+    assert(game_core_get_map_state(&core, "home", &last_visit_time_ms,
+        &map_visited));
+    assert(last_visit_time_ms == 123456789 && map_visited);
+    GameCoreSavedEnemy loaded_enemies[2] = {};
+    assert(game_core_get_map_enemies(&core, "home", loaded_enemies, 2) == 2);
+    GameCoreSavedEnemy loaded_enemy = loaded_enemies[0];
+    if (strcmp(loaded_enemy.instance_id, "enc_home_0") != 0) {
+        loaded_enemy = loaded_enemies[1];
+    }
+    assert(strcmp(loaded_enemy.instance_id, "enc_home_0") == 0);
+    assert(strcmp(loaded_enemy.monster_id, "trainingrat") == 0);
+    assert(loaded_enemy.spawn_area_index == 0 && loaded_enemy.x == 7
+        && loaded_enemy.y == 9 && loaded_enemy.health == 4
+        && loaded_enemy.action_points == 3);
+    assert(strcmp(core.current_map_id, "home") == 0);
+    assert(core.current_map_x == 7 && core.current_map_y == 9);
+    assert(game_core_reset_map_encounters(&core));
+    assert(game_core_get_map_state(&core, "home", &last_visit_time_ms,
+        &map_visited));
+    assert(last_visit_time_ms == 0 && map_visited);
+    GameCoreSavedEnemy retained_unique = {0};
+    assert(game_core_get_map_enemies(&core, "home", &retained_unique, 1) == 1);
+    assert(strcmp(retained_unique.instance_id, "named_unique") == 0);
+    assert(retained_unique.unique);
+    assert(game_core_get_enemy_conditions(&core, "home", "enc_home_0",
+        NULL, 0) == 0);
+    assert(game_core_quick_item(&core, 0) == NULL);
+    assert(strcmp(game_core_quick_item(&core, 1), "bread") == 0);
+    assert(game_core_quick_item(&core, GAME_CORE_QUICK_SLOTS) == NULL);
+    GameCoreCondition loaded_enemy_condition = {0};
+    assert(game_core_get_enemy_conditions(&core, "home", "mikhail_rat1",
+        &loaded_enemy_condition, 1) == 1);
+    assert(strcmp(loaded_enemy_condition.id, "poison_weak") == 0);
+    assert(loaded_enemy_condition.magnitude == 2
+        && loaded_enemy_condition.duration == 3);
     assert(core.random_state != 0);
     assert(game_core_quest_progress(&core, "mikhail_bread") == 10);
     assert(game_core_skill_level(&core, "weaponChance") == 2);
     assert(game_core_inventory_count(&core, "bread") == 2);
+    assert(strcmp(game_core_equipped_item(&core, GAME_CORE_EQUIP_WEAPON),
+        "training_sword") == 0);
+    assert(core.condition_count == 1 && core.conditions[0].immunity);
     assert(game_core_random(&core, 1000) == random_after_load);
 
     write_invalid_save(invalid_path);
@@ -152,11 +323,22 @@ int main(int argc, char **argv)
     assert(game_core_load(&core, invalid_path) == GAME_CORE_LOAD_OK);
     assert(core.gold == 9 && core.skill_points == 0);
     assert(game_core_skill_level(&core, "weaponChance") == 0);
+    assert(core.critical_skill == 0 && core.critical_multiplier == 1.0f);
+
+    write_version_five_save(invalid_path);
+    assert(game_core_load(&core, invalid_path) == GAME_CORE_LOAD_OK);
+    assert(core.gold == 9 && core.condition_count == 0);
+    assert(game_core_equipped_item(&core, GAME_CORE_EQUIP_WEAPON) == NULL);
+
+    write_version_four_save(invalid_path);
+    assert(game_core_load(&core, invalid_path) == GAME_CORE_LOAD_OK);
+    assert(core.gold == 9 && game_core_skill_level(&core, "weaponChance") == 2);
+    assert(core.critical_skill == 0 && core.critical_multiplier == 1.0f);
 
     write_duplicate_skill_save(invalid_path);
     assert(game_core_load(&core, invalid_path) == GAME_CORE_LOAD_ERROR);
     assert(core.gold == 9);
-    assert(game_core_skill_level(&core, "weaponChance") == 0);
+    assert(game_core_skill_level(&core, "weaponChance") == 2);
 
     assert(game_core_damage_player(&core, GAME_CORE_MAX_HEALTH));
     assert(core.health == 0);

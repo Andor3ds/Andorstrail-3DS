@@ -484,6 +484,100 @@ bool is_walkable(const Document &document, int x, int y)
     return walkable->gid_at(x, y, document.height) == 0;
 }
 
+bool is_adjacent(GridPosition first, GridPosition second)
+{
+    const int dx = std::abs(first.x - second.x);
+    const int dy = std::abs(first.y - second.y);
+    return (dx != 0 || dy != 0) && dx <= 1 && dy <= 1;
+}
+
+bool find_path_step(const Document &document, GridPosition from,
+    GridPosition destination, const std::function<bool(GridPosition)> &can_enter,
+    GridPosition &next_step)
+{
+    if (document.width <= 0 || document.height <= 0
+            || from.x < 0 || from.y < 0 || from.x >= document.width
+            || from.y >= document.height
+            || destination.x < 0 || destination.y < 0
+            || destination.x >= document.width
+            || destination.y >= document.height
+            || (from.x == destination.x && from.y == destination.y)) {
+        return false;
+    }
+    if (static_cast<std::size_t>(document.width)
+            > std::numeric_limits<std::size_t>::max()
+                / static_cast<std::size_t>(document.height)) {
+        return false;
+    }
+
+    struct PathNode {
+        GridPosition position;
+        std::uint64_t weight;
+        bool pending;
+    };
+
+    const std::size_t map_size = static_cast<std::size_t>(document.width)
+        * static_cast<std::size_t>(document.height);
+    std::vector<bool> visited(map_size, false);
+    std::vector<PathNode> queue;
+    queue.reserve(std::min<std::size_t>(map_size, 801));
+    queue.push_back({destination, 0, true});
+    visited[static_cast<std::size_t>(destination.x) * document.height
+        + destination.y] = true;
+
+    const int directions[8][2] = {
+        {-1, 0}, {1, 0}, {0, -1}, {0, 1},
+        {-1, 1}, {1, 1}, {1, -1}, {-1, -1}
+    };
+    int iterations = 0;
+    while (true) {
+        std::size_t candidate_index = queue.size();
+        for (std::size_t index = 0; index < queue.size(); ++index) {
+            if (queue[index].pending
+                    && (candidate_index == queue.size()
+                        || queue[index].weight < queue[candidate_index].weight)) {
+                candidate_index = index;
+            }
+        }
+        if (candidate_index == queue.size()) return false;
+
+        const GridPosition position = queue[candidate_index].position;
+        queue[candidate_index].pending = false;
+        if (++iterations > 100) return false;
+
+        const int dx = std::abs(from.x - position.x);
+        const int dy = std::abs(from.y - position.y);
+        if (dx <= 1 && dy <= 1) {
+            next_step = position;
+            return true;
+        }
+
+        for (const int (&direction)[2] : directions) {
+            const GridPosition next = {
+                position.x + direction[0], position.y + direction[1]
+            };
+            if (next.x < 0 || next.y < 0 || next.x >= document.width
+                    || next.y >= document.height) continue;
+
+            const std::size_t next_index = static_cast<std::size_t>(next.x)
+                * document.height + next.y;
+            if (visited[next_index]) continue;
+            visited[next_index] = true;
+            if (!is_walkable(document, next.x, next.y)
+                    || (can_enter && !can_enter(next))) continue;
+
+            const std::int64_t distance_x =
+                static_cast<std::int64_t>(from.x) - next.x;
+            const std::int64_t distance_y =
+                static_cast<std::int64_t>(from.y) - next.y;
+            const std::uint64_t weight =
+                static_cast<std::uint64_t>(distance_x * distance_x)
+                + static_cast<std::uint64_t>(distance_y * distance_y);
+            queue.push_back({next, weight, true});
+        }
+    }
+}
+
 bool move_player(const Document &document, GridPosition &position, int dx, int dy)
 {
     if (std::abs(dx) + std::abs(dy) != 1) return false;
@@ -702,6 +796,10 @@ bool translate_document(
                         object.name, error)
                         || !parse_required_integer(object.properties, "respawnspeed", 10,
                             area.respawn_speed, object.name, error)) return false;
+                if (area.quantity < 0) {
+                    if (error != NULL) *error = "invalid quantity on map object " + object.name;
+                    return false;
+                }
                 area.active_for_new_game = property_boolean(object.properties, "active", true);
                 area.ignore_areas = property_boolean(object.properties, "ignoreAreas", false);
                 result.spawn_areas.push_back(area);
