@@ -58,15 +58,18 @@ The app starts on the original Android Home TMX map. Use the D-pad to move,
 A to talk/interact or attack a nearby hostile monster, X as an alternate
 attack button, B to end a combat turn, and START to exit. Android target
 selection uses touch; on 3DS, L/R cycles adjacent combat targets. Open Hero
-Info and select Items to use consumables or equip gear; tap an item and press A
-to use/equip, or tap a worn slot and press A to unequip. Four inventory rows
-are visible at once, with category and sort controls above them. These actions use the
+Info and select Items to use consumables or equip gear; tap a worn slot to see
+its name, then tap gear and press A to equip it there, or press A on the
+selected slot to unequip it. Tap an item and press A to use/equip it in its
+default slot. Four inventory rows are visible at once, with category and sort
+controls above them. These actions use the
 source-defined action-point costs during combat. Combat uses player and monster
 action points, source monster stats, drops and experience, source-derived
 equipment/condition bonuses, hit effects, and skill bonuses.
 Combat adjacency includes diagonal tiles, and monsters use the original
-obstacle-aware pathfinding rules. Enemy combat actions are paced to the
-original game's one-second turn delay.
+obstacle-aware pathfinding rules. Aggressive monsters can engage from adjacent
+tiles using the original evasion-based chance. Enemy combat actions are paced
+to the original game's one-second turn delay.
 Mikhail is drawn with his original sprite at his Home spawn;
 press A within two tiles to talk. Travel south to Crossglen, then enter the
 Crossglen Hall to find Mara at her original spawn and buy bread. The two

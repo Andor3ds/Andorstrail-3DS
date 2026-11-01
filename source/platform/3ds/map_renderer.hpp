@@ -134,6 +134,8 @@ private:
         bool first_turn_of_combat = false);
     void advance_monster_turn(std::uint64_t current_time_ms);
     void finish_monster_turn(std::string &message);
+    bool check_monster_aggression();
+    void begin_combat_with_enemy(EnemyState &enemy);
     void update_enemy_turn(EnemyState &enemy, std::string &message);
     bool enemy_should_move_in_combat(const EnemyState &enemy) const;
     bool has_adjacent_aggressive_enemy() const;

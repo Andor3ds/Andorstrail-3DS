@@ -21,6 +21,7 @@ namespace {
 const std::uint64_t MAP_UNVISITED_RESPAWN_DURATION_MS = 3 * 60 * 1000;
 const std::uint64_t GAME_ROUND_TICK_DURATION_MS = 500;
 const std::uint64_t COMBAT_ACTION_INTERVAL_MS = 1000;
+const int MONSTER_IMMOBILE_MOVE_COST = 999;
 const unsigned int TICKS_PER_ROUND = 12;
 const unsigned int TICKS_PER_FULL_ROUND = 50;
 
@@ -983,7 +984,7 @@ bool MapRenderer::apply_enemy_round_on_combat_exit(
             continue;
         }
         combat::AttackResult result;
-        if (!apply_enemy_condition_round(enemy, false, result, error)) {
+        if (!apply_enemy_condition_round(enemy, true, result, error)) {
             error = enemy.name + ": " + error;
             return false;
         }
@@ -1163,10 +1164,11 @@ void MapRenderer::update(std::uint64_t current_time_ms)
     if (modal_interaction_) return;
 
     if (world_active) update_enemies(current_time_ms);
-    if (!world_active) return;
+    if (!world_active || combat_active_ || modal_interaction_) return;
 
     while (round_tick_accumulator_ms_ >= GAME_ROUND_TICK_DURATION_MS) {
         round_tick_accumulator_ms_ -= GAME_ROUND_TICK_DURATION_MS;
+        if (check_monster_aggression()) return;
         if (--ticks_until_next_round_ == 0) {
             std::string error;
             if (!apply_out_of_combat_round(false, interaction_message_, error)) {
@@ -1201,6 +1203,7 @@ void MapRenderer::update_enemies(std::uint64_t current_time_ms)
 
     for (std::size_t index = 0; index < enemies_.size(); ++index) {
         EnemyState &enemy = enemies_[index];
+        if (enemy.move_cost == MONSTER_IMMOBILE_MOVE_COST) continue;
         const std::uint64_t movement_interval_ms = std::max<std::uint64_t>(1,
             static_cast<std::uint64_t>(1200) * enemy.move_cost
                 / enemy.maximum_action_points);
@@ -1246,16 +1249,8 @@ void MapRenderer::update_enemies(std::uint64_t current_time_ms)
         if (has_path_step) enemy.has_destination = false;
         else next = map::step_toward(enemy.position, enemy.destination);
         if (next.x == player_.x && next.y == player_.y) {
-            const int aggression_chance = std::max(0,
-                15 - game_core_skill_level(core_, "evasion") * 5);
-            if (game_core_random(core_, 100)
-                    < static_cast<std::uint32_t>(aggression_chance)) {
-                combat_active_ = true;
-                player_action_points_ = maximum_player_action_points_;
-                selected_enemy_instance_id_ = enemy.instance_id;
-                interaction_message_ = enemy.name + " engaged you.";
-                resolve_monster_turn(interaction_message_, true);
-                modal_interaction_ = core_->health <= 0;
+            if (enemy.aggressive) {
+                begin_combat_with_enemy(enemy);
                 return;
             }
             enemy.has_destination = false;
@@ -1271,6 +1266,39 @@ void MapRenderer::update_enemies(std::uint64_t current_time_ms)
             enemy.next_action_time_ms = current_time_ms + movement_interval_ms
                 * (1 + game_core_random(core_, 5));
         }
+    }
+}
+
+bool MapRenderer::check_monster_aggression()
+{
+    if (core_ == NULL || combat_active_ || modal_interaction_) return false;
+    const int aggression_chance = std::max(0,
+        15 - game_core_skill_level(core_, "evasion") * 5);
+    for (EnemyState &enemy : enemies_) {
+        if (!enemy.aggressive || !map::is_adjacent(player_, enemy.position)) {
+            continue;
+        }
+        if (game_core_random(core_, 100)
+                < static_cast<std::uint32_t>(aggression_chance)) {
+            begin_combat_with_enemy(enemy);
+            return true;
+        }
+    }
+    return false;
+}
+
+void MapRenderer::begin_combat_with_enemy(EnemyState &enemy)
+{
+    combat_active_ = true;
+    player_action_points_ = maximum_player_action_points_;
+    selected_enemy_instance_id_ = enemy.instance_id;
+    interaction_message_ = enemy.name + " engaged you.";
+    resolve_monster_turn(interaction_message_, true);
+    modal_interaction_ = core_ == NULL || core_->health <= 0;
+    std::string error;
+    if (!persist_current_map_state(false, error)) {
+        interaction_message_ += "\nCombat state could not be saved: " + error;
+        modal_interaction_ = true;
     }
 }
 
@@ -1823,6 +1851,7 @@ bool MapRenderer::use_or_equip_item(const std::string &item_id, std::string &err
 
     const std::unique_ptr<GameCore> previous_state(new (std::nothrow) GameCore);
     if (!previous_state) {
+        player_action_points_ = previous_action_points;
         error = "Inventory action state could not be allocated.";
         return false;
     }

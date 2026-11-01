@@ -112,6 +112,22 @@ Tex3DS_SubTexture crop_subtexture(const Tex3DS_SubTexture &source,
     return result;
 }
 
+const char *equipment_slot_name(GameCoreEquipmentSlot slot)
+{
+    switch (slot) {
+    case GAME_CORE_EQUIP_WEAPON: return "Weapon";
+    case GAME_CORE_EQUIP_SHIELD: return "Off-hand";
+    case GAME_CORE_EQUIP_HEAD: return "Head";
+    case GAME_CORE_EQUIP_BODY: return "Body";
+    case GAME_CORE_EQUIP_HAND: return "Hands";
+    case GAME_CORE_EQUIP_FEET: return "Feet";
+    case GAME_CORE_EQUIP_NECK: return "Neck";
+    case GAME_CORE_EQUIP_LEFT_RING: return "Left ring";
+    case GAME_CORE_EQUIP_RIGHT_RING: return "Right ring";
+    }
+    return "Equipment";
+}
+
 }
 
 HudView::HudView()
@@ -244,16 +260,20 @@ bool HudView::load_images(std::string &error)
 HudAction HudView::handle_touch(int x, int y)
 {
     if (screen_ == SCREEN_QUICK_ITEMS) {
-        if (y >= 48 && y < 108) {
-            const int slot = (y - 48) / 20;
-            if (slot < GAME_CORE_QUICK_SLOTS) {
+        if (x >= 8 && x < 312 && y >= 40 && y < 106) {
+            const int slot = (y - 40) / 22;
+            const int slot_y = 40 + slot * 22;
+            if (slot < GAME_CORE_QUICK_SLOTS && y < slot_y + 20) {
                 selected_quick_slot_ = slot;
                 return HUD_ACTION_NONE;
             }
         }
-        if (y >= 115 && y < 223) {
-            const int index = inventory_scroll_ + (y - 115) / 18;
-            if (index >= 0
+        if (x >= 8 && x < 312 && y >= 123 && y < 219) {
+            const int row = (y - 123) / 16;
+            const int row_y = 123 + row * 16;
+            const int index = inventory_scroll_ + row;
+            if (y < row_y + 16 && index >= 0
+                    && index < inventory_scroll_ + 6
                     && static_cast<std::size_t>(index) < core_->inventory_count) {
                 selected_inventory_index_ = index;
                 std::string error;
@@ -324,7 +344,31 @@ HudAction HudView::handle_touch(int x, int y)
             if (visible_index >= 0
                     && static_cast<std::size_t>(visible_index) < visible.size()) {
                 selected_inventory_index_ = visible[visible_index];
-                notice_.clear();
+                if (selected_equipment_slot_ >= 0
+                        && selected_equipment_slot_ < GAME_CORE_EQUIPMENT_SLOTS) {
+                    std::string name;
+                    std::string error;
+                    const std::string &item_id =
+                        core_->inventory[selected_inventory_index_].id;
+                    items::ActionType item_action;
+                    GameCoreEquipmentSlot item_slot = GAME_CORE_EQUIP_WEAPON;
+                    bool two_handed = false;
+                    if (!items::item_name(resources_, item_id, name, error)
+                            || !items::item_action(resources_, item_id, item_action,
+                                item_slot, two_handed, error)) {
+                        notice_ = error;
+                    } else if (item_action == items::ACTION_EQUIP) {
+                        notice_ = "Equip " + name + " in "
+                            + equipment_slot_name(static_cast<GameCoreEquipmentSlot>(
+                                selected_equipment_slot_)) + "?";
+                    } else if (item_action == items::ACTION_USE) {
+                        notice_ = "Selected " + name + "; A uses it.";
+                    } else {
+                        notice_ = name + " cannot be equipped.";
+                    }
+                } else {
+                    notice_.clear();
+                }
             }
             return HUD_ACTION_NONE;
         }
@@ -340,8 +384,24 @@ HudAction HudView::handle_touch(int x, int y)
             for (int slot = 0; slot < GAME_CORE_EQUIPMENT_SLOTS; ++slot) {
                 if (x >= slot_x[slot] && x < slot_x[slot] + 19
                         && y >= slot_y[slot] && y < slot_y[slot] + 19) {
-                    selected_equipment_slot_ = slot_ids[slot];
-                    notice_.clear();
+                    const GameCoreEquipmentSlot selected_slot = slot_ids[slot];
+                    selected_equipment_slot_ = selected_slot;
+                    const char *equipped = game_core_equipped_item(core_,
+                        selected_slot);
+                    if (equipped == NULL || equipped[0] == '\0') {
+                        notice_ = std::string(equipment_slot_name(selected_slot))
+                            + " slot is empty.";
+                    } else {
+                        std::string name;
+                        std::string error;
+                        if (items::item_name(resources_, equipped, name, error)) {
+                            notice_ = std::string(equipment_slot_name(selected_slot))
+                                + ": " + name;
+                        } else {
+                            notice_ = equipment_slot_name(selected_slot)
+                                + std::string(": ") + error;
+                        }
+                    }
                     return HUD_ACTION_NONE;
                 }
             }
