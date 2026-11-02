@@ -58,11 +58,12 @@ The app starts on the original Android Home TMX map. Use the D-pad to move,
 A to talk/interact or attack a nearby hostile monster, X as an alternate
 attack button, B to end a combat turn, and START to exit. Android target
 selection uses touch; on 3DS, L/R cycles adjacent combat targets. Open Hero
-Info and select Items to use consumables or equip gear; tap a worn slot to see
-its name, then tap gear and press A to equip it there, or press A on the
-selected slot to unequip it. Tap an item and press A to use/equip it in its
-default slot. Four inventory rows are visible at once, with category and sort
-controls above them. These actions use the
+Info and select Items to use consumables or equip gear. The Items screen shows
+worn equipment above the categorized inventory, following the original portrait
+layout. Tap a worn slot, then tap gear and press A to equip it there, or press
+A on the selected slot to unequip it. Tap an item and press A to use/equip it
+in its default slot. Four inventory rows are visible at once, with
+original-style category and sort selectors above them. These actions use the
 source-defined action-point costs during combat. Combat uses player and monster
 action points, source monster stats, drops and experience, source-derived
 equipment/condition bonuses, hit effects, and skill bonuses.

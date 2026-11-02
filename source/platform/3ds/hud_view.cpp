@@ -3,6 +3,7 @@
 #include "game_items.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -112,6 +113,91 @@ Tex3DS_SubTexture crop_subtexture(const Tex3DS_SubTexture &source,
     return result;
 }
 
+const char *bitmap_glyph(char character)
+{
+    switch (character) {
+    case 'A': return "01110100011000111111100011000110001";
+    case 'B': return "11110100011000111110100011000111110";
+    case 'C': return "01111100001000010000100001000001111";
+    case 'D': return "11110100011000110001100011000111110";
+    case 'E': return "11111100001000011110100001000011111";
+    case 'F': return "11111100001000011110100001000010000";
+    case 'G': return "01111100001000010111100011000101111";
+    case 'H': return "10001100011000111111100011000110001";
+    case 'I': return "11111001000010000100001000010011111";
+    case 'J': return "00111000100001000010000101001001100";
+    case 'K': return "10001100101010011000101001001010001";
+    case 'L': return "10000100001000010000100001000011111";
+    case 'M': return "10001110111010110101100011000110001";
+    case 'N': return "10001110011010110011100011000110001";
+    case 'O': return "01110100011000110001100011000101110";
+    case 'P': return "11110100011000111110100001000010000";
+    case 'Q': return "01110100011000110001101011001001101";
+    case 'R': return "11110100011000111110101001001010001";
+    case 'S': return "01111100001000001110000010000111110";
+    case 'T': return "11111001000010000100001000010000100";
+    case 'U': return "10001100011000110001100011000101110";
+    case 'V': return "10001100011000110001100010101000100";
+    case 'W': return "10001100011000110101101011101110001";
+    case 'X': return "10001100010101000100010101000110001";
+    case 'Y': return "10001100010101000100001000010000100";
+    case 'Z': return "11111000010001000100010001000011111";
+    case 'a': return "00000011100000101111100011000101111";
+    case 'b': return "10000100001011011001100011000111110";
+    case 'c': return "00000011101000110000100001000101110";
+    case 'd': return "00001000010110110011100011000101111";
+    case 'e': return "00000011101000111111100001000101110";
+    case 'f': return "00110010010100011100010000100001000";
+    case 'g': return "00000011111000110001011110000101110";
+    case 'h': return "10000100001011011001100011000110001";
+    case 'i': return "00100000000110000100001000010001110";
+    case 'j': return "00010000000011000010000101001001100";
+    case 'k': return "10000100001001010100110001010010010";
+    case 'l': return "01100001000010000100001000010001110";
+    case 'm': return "00000110101010110101101011010110101";
+    case 'n': return "00000101101100110001100011000110001";
+    case 'o': return "00000011101000110001100011000101110";
+    case 'p': return "00000111101000110001111101000010000";
+    case 'q': return "00000011111000110001011110000100001";
+    case 'r': return "00000101101100110000100001000010000";
+    case 's': return "00000011111000001110000010001111110";
+    case 't': return "01000010001110001000010000100100110";
+    case 'u': return "00000100011000110001100011001101101";
+    case 'v': return "00000100011000110001100010101000100";
+    case 'w': return "00000100011000110101101011010101010";
+    case 'x': return "00000100010101000100010101000110001";
+    case 'y': return "00000100011000110001011110000101110";
+    case 'z': return "00000111110001000100010001000011111";
+    case '0': return "01110100011001110101110011000101110";
+    case '1': return "00100011000010000100001000010001110";
+    case '2': return "01110100010000100010001000100011111";
+    case '3': return "11110000010000101110000010000111110";
+    case '4': return "00010001100101010010111110001000010";
+    case '5': return "11111100001000011110000010000111110";
+    case '6': return "01110100001000011110100011000101110";
+    case '7': return "11111000010001000100010000100001000";
+    case '8': return "01110100011000101110100011000101110";
+    case '9': return "01110100011000101111000010000101110";
+    case ':': return "00000001000010000000001000010000000";
+    case '.': return "00000000000000000000000000011000110";
+    case ',': return "00000000000000000000001100011000100";
+    case '\'': return "00100001000010000000000000000000000";
+    case '-': return "00000000000000011111000000000000000";
+    case '+': return "00000001000010011111001000010000000";
+    case '%': return "11001110100001000100010001011100110";
+    case '/': return "00001000100001000100010001000100000";
+    case '(': return "00010001000100001000010000010000010";
+    case ')': return "01000001000001000010000100010001000";
+    case '[': return "01110010000100001000010000100001110";
+    case ']': return "01110000100001000010000100001001110";
+    case '?': return "01110100010000100010001000000000100";
+    case '!': return "00100001000010000100001000000000100";
+    case '=': return "00000000001111100000111110000000000";
+    case ' ': return "00000000000000000000000000000000000";
+    default: return "01110100010000100010000000000000100";
+    }
+}
+
 const char *equipment_slot_name(GameCoreEquipmentSlot slot)
 {
     switch (slot) {
@@ -201,7 +287,6 @@ void HudView::dispose()
     inventory_scroll_ = 0;
     selected_inventory_index_ = -1;
     selected_equipment_slot_ = -1;
-    selected_equipment_slot_ = -1;
     inventory_category_ = 0;
     inventory_sort_ = 0;
     selected_quick_slot_ = 0;
@@ -246,6 +331,7 @@ bool HudView::load_images(std::string &error)
             error += path;
             return false;
         }
+        C3D_TexSetFilter(images_[index].tex, GPU_NEAREST, GPU_NEAREST);
     }
     if (images_[ICON_QUICKSLOTS].subtex->width != 64
             || images_[ICON_QUICKSLOTS].subtex->height != 32
@@ -328,7 +414,7 @@ HudAction HudView::handle_touch(int x, int y)
             hero_tab_ = std::min(3, x / 80);
             return HUD_ACTION_NONE;
         }
-        if (hero_tab_ == 3 && y >= 138 && y < 154) {
+        if (hero_tab_ == 3 && y >= 155 && y < 174) {
             if (x < 160) inventory_category_ = (inventory_category_ + 1) % 8;
             else inventory_sort_ = (inventory_sort_ + 1) % 6;
             inventory_scroll_ = 0;
@@ -338,9 +424,12 @@ HudAction HudView::handle_touch(int x, int y)
             notice_.clear();
             return HUD_ACTION_NONE;
         }
-        if (hero_tab_ == 3 && y >= 154 && y < 226) {
+        if (hero_tab_ == 3 && x >= 4 && x < 316 && y >= 174 && y < 238) {
             const std::vector<int> visible = filtered_inventory_indices();
-            const int visible_index = inventory_scroll_ + (y - 154) / 18;
+            const int maximum_scroll = visible.size() > 4
+                ? static_cast<int>(visible.size() - 4) : 0;
+            inventory_scroll_ = std::min(inventory_scroll_, maximum_scroll);
+            const int visible_index = inventory_scroll_ + (y - 174) / 16;
             if (visible_index >= 0
                     && static_cast<std::size_t>(visible_index) < visible.size()) {
                 selected_inventory_index_ = visible[visible_index];
@@ -373,8 +462,8 @@ HudAction HudView::handle_touch(int x, int y)
             return HUD_ACTION_NONE;
         }
         if (hero_tab_ == 3) {
-            const int slot_x[] = {61, 84, 107, 24, 24, 147, 147, 61, 84};
-            const int slot_y[] = {53, 53, 53, 76, 98, 76, 98, 98, 98};
+            const int slot_x[] = {45, 77, 109, 17, 17, 143, 143, 45, 115};
+            const int slot_y[] = {56, 56, 56, 84, 112, 84, 112, 112, 112};
             const GameCoreEquipmentSlot slot_ids[] = {
                 GAME_CORE_EQUIP_HEAD, GAME_CORE_EQUIP_BODY, GAME_CORE_EQUIP_NECK,
                 GAME_CORE_EQUIP_WEAPON, GAME_CORE_EQUIP_LEFT_RING,
@@ -382,8 +471,8 @@ HudAction HudView::handle_touch(int x, int y)
                 GAME_CORE_EQUIP_HAND, GAME_CORE_EQUIP_FEET
             };
             for (int slot = 0; slot < GAME_CORE_EQUIPMENT_SLOTS; ++slot) {
-                if (x >= slot_x[slot] && x < slot_x[slot] + 19
-                        && y >= slot_y[slot] && y < slot_y[slot] + 19) {
+                if (x >= slot_x[slot] && x < slot_x[slot] + 28
+                        && y >= slot_y[slot] && y < slot_y[slot] + 28) {
                     const GameCoreEquipmentSlot selected_slot = slot_ids[slot];
                     selected_equipment_slot_ = selected_slot;
                     const char *equipped = game_core_equipped_item(core_,
@@ -836,7 +925,7 @@ void HudView::draw_hero_info() const
             1.0f, 0.3f, NULL, 0.5f, 0.5f);
         else C2D_DrawImageAt(images_[tab_icons[index]], x + 26.0f, 3.0f, 0.3f,
             NULL, 0.8f, 0.8f);
-        draw_text(tabs[index], x + 8.0f, 27.0f, 0.27f, PANEL_TEXT);
+        draw_text(tabs[index], x + 8.0f, 27.0f, 0.31f, PANEL_TEXT);
     }
 
     if (hero_tab_ == 0) {
@@ -968,87 +1057,94 @@ void HudView::draw_hero_info() const
                 C2D_Color32(255, 210, 120, 255), true, 300.0f);
         }
     } else {
-        draw_panel(3.0f, 47.0f, 314.0f, 76.0f);
-        draw_text("Worn equipment", 8.0f, 49.0f, 0.24f, PANEL_TEXT);
+        draw_panel(3.0f, 47.0f, 314.0f, 95.0f);
+        draw_text("Worn equipment", 8.0f, 49.0f, 0.30f, PANEL_TEXT);
         const Icon equipment_slots[] = {
             ICON_EQUIP_HEAD, ICON_EQUIP_BODY, ICON_EQUIP_NECK,
             ICON_EQUIP_WEAPON, ICON_EQUIP_RING,
             ICON_EQUIP_SHIELD, ICON_EQUIP_RING,
             ICON_EQUIP_HAND, ICON_EQUIP_FEET
         };
-        const float slot_x[] = {61.0f, 84.0f, 107.0f, 24.0f, 24.0f,
-            147.0f, 147.0f, 61.0f, 84.0f};
-        const float slot_y[] = {53.0f, 53.0f, 53.0f, 76.0f, 98.0f,
-            76.0f, 98.0f, 98.0f, 98.0f};
+        const float slot_x[] = {45.0f, 77.0f, 109.0f, 17.0f, 17.0f,
+            143.0f, 143.0f, 45.0f, 115.0f};
+        const float slot_y[] = {56.0f, 56.0f, 56.0f, 84.0f, 112.0f,
+            84.0f, 112.0f, 112.0f, 112.0f};
         const GameCoreEquipmentSlot slot_ids[] = {
             GAME_CORE_EQUIP_HEAD, GAME_CORE_EQUIP_BODY, GAME_CORE_EQUIP_NECK,
             GAME_CORE_EQUIP_WEAPON, GAME_CORE_EQUIP_LEFT_RING,
             GAME_CORE_EQUIP_SHIELD, GAME_CORE_EQUIP_RIGHT_RING,
             GAME_CORE_EQUIP_HAND, GAME_CORE_EQUIP_FEET
         };
-        for (int slot = 0; slot < 9; ++slot) {
+        for (int slot = 0; slot < GAME_CORE_EQUIPMENT_SLOTS; ++slot) {
             if (slot_ids[slot] == selected_equipment_slot_) {
-                C2D_DrawRectSolid(slot_x[slot] - 1.0f, slot_y[slot] - 1.0f,
-                    0.25f, 19.0f, 19.0f, C2D_Color32(255, 210, 120, 255));
+                C2D_DrawRectSolid(slot_x[slot] - 1.0f,
+                    slot_y[slot] - 1.0f, 0.25f, 29.0f, 29.0f,
+                    C2D_Color32(255, 210, 120, 255));
             }
             C2D_DrawImageAt(images_[ICON_EQUIP_SQUARE], slot_x[slot],
-                slot_y[slot], 0.3f, NULL, 1.15f, 1.15f);
+                slot_y[slot], 0.3f, NULL, 0.66f, 0.66f);
             const char *equipped_item = game_core_equipped_item(core_,
                 slot_ids[slot]);
             if (equipped_item != NULL && equipped_item[0] != '\0') {
-                draw_item_icon(equipped_item, slot_x[slot] + 2.0f,
-                    slot_y[slot] + 2.0f);
+                draw_item_icon(equipped_item, slot_x[slot] + 3.0f,
+                    slot_y[slot] + 3.0f, 0.66f);
             } else {
                 C2D_DrawImageAt(images_[equipment_slots[slot]],
-                    slot_x[slot] + 1.0f, slot_y[slot] + 1.0f, 0.2f,
-                    NULL, 0.55f, 0.55f);
+                    slot_x[slot] + 4.0f, slot_y[slot] + 4.0f, 0.2f,
+                    NULL, 0.66f, 0.66f);
             }
         }
-        C2D_DrawImageAt(images_[ICON_HERO_LARGE], 81.0f, 76.0f, 0.3f,
-            NULL, 1.0f, 1.0f);
-        draw_panel(180.0f, 51.0f, 133.0f, 22.0f);
-        C2D_DrawImageAt(images_[ICON_COINS], 182.0f, 53.0f, 0.3f,
-            NULL, 0.55f, 0.55f);
-        char line[80];
+        C2D_DrawImageAt(images_[ICON_HERO_LARGE], 75.0f, 84.0f, 0.3f,
+            NULL, 0.62f, 0.62f);
+        char line[96];
+        const int attack_chance = stats_valid
+            ? player_stats.attack_chance : core_->attack_chance;
+        const int minimum_damage = stats_valid
+            ? player_stats.minimum_damage : core_->attack_damage;
+        const int maximum_damage = stats_valid
+            ? player_stats.maximum_damage : core_->attack_damage;
+        const int defense = stats_valid
+            ? player_stats.block_chance : core_->block_chance;
+        draw_panel(181.0f, 55.0f, 132.0f, 25.0f);
+        C2D_DrawImageAt(images_[ICON_COINS], 184.0f, 58.0f, 0.3f,
+            NULL, 0.62f, 0.62f);
         std::snprintf(line, sizeof(line), "Gold: %d", core_->gold);
-        draw_text(line, 202.0f, 55.0f, 0.25f, PANEL_TEXT);
-        draw_panel(180.0f, 77.0f, 133.0f, 22.0f);
-        C2D_DrawImageAt(images_[ICON_EQUIP_WEAPON], 182.0f, 79.0f,
-            0.3f, NULL, 0.55f, 0.55f);
+        draw_text(line, 208.0f, 59.0f, 0.32f, PANEL_TEXT);
+        draw_panel(181.0f, 85.0f, 132.0f, 25.0f);
+        C2D_DrawImageAt(images_[ICON_EQUIP_WEAPON], 184.0f, 88.0f,
+            0.3f, NULL, 0.62f, 0.62f);
         std::snprintf(line, sizeof(line), "Attack: %d%%  %d-%d",
-            stats_valid ? player_stats.attack_chance : core_->attack_chance,
-            stats_valid ? player_stats.minimum_damage : core_->attack_damage,
-            stats_valid ? player_stats.maximum_damage : core_->attack_damage);
-        draw_text(line, 202.0f, 81.0f, 0.25f, PANEL_TEXT);
-        draw_panel(180.0f, 103.0f, 133.0f, 22.0f);
-        C2D_DrawImageAt(images_[ICON_EQUIP_SHIELD], 182.0f, 105.0f,
-            0.3f, NULL, 0.55f, 0.55f);
-        std::snprintf(line, sizeof(line), "Defense: %d",
-            stats_valid ? player_stats.block_chance : core_->block_chance);
-        draw_text(line, 202.0f, 107.0f, 0.25f, PANEL_TEXT);
+            attack_chance, minimum_damage, maximum_damage);
+        draw_text(line, 208.0f, 89.0f, 0.29f, PANEL_TEXT);
+        draw_panel(181.0f, 115.0f, 132.0f, 22.0f);
+        C2D_DrawImageAt(images_[ICON_EQUIP_SHIELD], 184.0f, 116.0f,
+            0.3f, NULL, 0.58f, 0.58f);
+        std::snprintf(line, sizeof(line), "Defense: %d", defense);
+        draw_text(line, 208.0f, 119.0f, 0.30f, PANEL_TEXT);
 
-        draw_panel(3.0f, 126.0f, 314.0f, 111.0f);
-        draw_text("Inventory", 8.0f, 128.0f, 0.26f, PANEL_TEXT);
+        draw_panel(3.0f, 143.0f, 314.0f, 96.0f);
         if (!notice_.empty()) {
-            draw_text(notice_.c_str(), 75.0f, 129.0f, 0.18f,
-                C2D_Color32(255, 210, 120, 255));
+            draw_text(notice_.c_str(), 8.0f, 145.0f, 0.26f,
+                C2D_Color32(255, 210, 120, 255), false, 300.0f);
+        } else {
+            draw_text("Inventory", 8.0f, 145.0f, 0.31f, PANEL_TEXT);
         }
         static const char *const category_names[] = {
             "All", "Weapons", "Armor", "Jewelry",
             "Potions", "Food", "Quest", "Other"
         };
         static const char *const sort_names[] = {
-            "Custom", "Name", "Price", "Quantity", "Rarity", "Type"
+            "Unsorted", "Name", "Price", "Quantity", "Rarity", "Type"
         };
-        draw_panel(5.0f, 138.0f, 151.0f, 15.0f);
-        draw_panel(162.0f, 138.0f, 153.0f, 15.0f);
+        draw_panel(5.0f, 155.0f, 151.0f, 18.0f);
+        draw_panel(162.0f, 155.0f, 153.0f, 18.0f);
         char filter_label[48];
-        std::snprintf(filter_label, sizeof(filter_label), "Filter: %s",
+        std::snprintf(filter_label, sizeof(filter_label), "%s",
             category_names[inventory_category_]);
-        draw_text(filter_label, 8.0f, 140.0f, 0.20f, PANEL_TEXT);
-        std::snprintf(filter_label, sizeof(filter_label), "Sort: %s",
+        draw_text(filter_label, 8.0f, 158.0f, 0.31f, PANEL_TEXT);
+        std::snprintf(filter_label, sizeof(filter_label), "%s",
             sort_names[inventory_sort_]);
-        draw_text(filter_label, 166.0f, 140.0f, 0.20f, PANEL_TEXT);
+        draw_text(filter_label, 166.0f, 158.0f, 0.31f, PANEL_TEXT);
 
         const std::vector<int> visible = filtered_inventory_indices();
         const int maximum_scroll = visible.size() > 4
@@ -1056,12 +1152,14 @@ void HudView::draw_hero_info() const
         const std::size_t start = static_cast<std::size_t>(
             std::min(inventory_scroll_, maximum_scroll));
         const std::size_t end = std::min(visible.size(), start + 4);
-        int y = 154;
-        for (std::size_t position = start; position < end; ++position, y += 18) {
+        int y = 174;
+        for (std::size_t position = start; position < end; ++position, y += 16) {
             const int index = visible[position];
             if (index == selected_inventory_index_) {
                 C2D_DrawRectSolid(5.0f, static_cast<float>(y), 0.4f, 310.0f,
-                    17.0f, C2D_Color32(77, 70, 50, 255));
+                    16.0f, C2D_Color32(36, 55, 76, 255));
+                C2D_DrawRectSolid(5.0f, static_cast<float>(y), 0.3f, 2.0f,
+                    16.0f, C2D_Color32(255, 210, 120, 255));
             }
             const std::string &item_id = core_->inventory[index].id;
             std::map<std::string, std::string>::iterator cached =
@@ -1070,37 +1168,30 @@ void HudView::draw_hero_info() const
                 std::string name;
                 std::string error;
                 if (!items::item_name(resources_, item_id, name, error)) {
-                    name = std::string(item_id) + " (name unavailable)";
+                    name = item_id;
+                    inventory_error_ = error;
                 }
-                cached = item_name_cache_.insert(std::make_pair(item_id, name)).first;
+                cached = item_name_cache_.insert(
+                    std::make_pair(item_id, name)).first;
             }
-            draw_item_icon(item_id, 7.0f, static_cast<float>(y - 2));
+            draw_item_icon(item_id, 7.0f, static_cast<float>(y), 0.50f);
             if (core_->inventory[index].value > 1) {
                 std::snprintf(line, sizeof(line), "%s (%d)",
                     cached->second.c_str(), core_->inventory[index].value);
             } else {
                 std::snprintf(line, sizeof(line), "%s", cached->second.c_str());
             }
-            draw_text(line, 31.0f, static_cast<float>(y + 3), 0.28f, PANEL_TEXT);
-            C2D_DrawRectSolid(7.0f, static_cast<float>(y + 17), 0.4f,
+            draw_text(line, 29.0f, static_cast<float>(y + 4), 0.43f, PANEL_TEXT);
+            C2D_DrawRectSolid(7.0f, static_cast<float>(y + 15), 0.4f,
                 306.0f, 0.5f, PANEL_BORDER);
         }
         if (!inventory_error_.empty()) {
-            draw_text(inventory_error_.c_str(), 8.0f, 155.0f, 0.20f,
+            draw_text(inventory_error_.c_str(), 8.0f, 175.0f, 0.20f,
                 C2D_Color32(255, 160, 140, 255), true, 300.0f);
         } else if (visible.empty()) {
-            draw_text("No items in this category.", 8.0f, 155.0f, 0.22f, PANEL_TEXT);
+            draw_text("No items in this category.", 8.0f, 176.0f,
+                0.28f, PANEL_TEXT);
         }
-        const char *inventory_hint = "Tap item or worn slot to select";
-        if (selected_inventory_index_ >= 0
-                && selected_equipment_slot_ >= 0) {
-            inventory_hint = "A: equip selected item in selected slot";
-        } else if (selected_inventory_index_ >= 0) {
-            inventory_hint = "A: use/equip selected item";
-        } else if (selected_equipment_slot_ >= 0) {
-            inventory_hint = "A: remove selected worn item";
-        }
-        draw_text(inventory_hint, 8.0f, 228.0f, 0.22f, PANEL_TEXT);
     }
 }
 
@@ -1441,7 +1532,8 @@ void HudView::draw_nine_patch(Icon icon, float x, float y, float width,
     }
 }
 
-void HudView::draw_item_icon(const std::string &item_id, float x, float y) const
+void HudView::draw_item_icon(const std::string &item_id, float x, float y,
+    float scale) const
 {
     std::map<std::string, std::pair<int, unsigned int> >::iterator cached =
         item_icon_cache_.find(item_id);
@@ -1468,7 +1560,7 @@ void HudView::draw_item_icon(const std::string &item_id, float x, float y) const
     if (columns == 0 || cached->second.second >= columns * rows) return;
     Tex3DS_SubTexture subtexture = crop_item_icon(item, cached->second.second);
     item.subtex = &subtexture;
-    C2D_DrawImageAt(item, x, y, 0.5f, NULL, 0.53f, 0.53f);
+    C2D_DrawImageAt(item, x, y, 0.5f, NULL, scale, scale);
 }
 
 void HudView::draw_bar(float x, float y, float width, int current, int maximum,
@@ -1504,11 +1596,74 @@ void HudView::draw_text(const char *text, float x, float y, float scale,
 {
     if (text == NULL) return;
     if (text_buffer_ == NULL) return;
-    C2D_Text parsed;
-    C2D_TextFontParse(&parsed, font_, text_buffer_, text);
-    C2D_TextOptimize(&parsed);
-    C2D_DrawText(&parsed, C2D_WithColor | (wrap ? C2D_WordWrap : 0),
-        x, y, 0.4f, scale, scale, color, wrap ? wrap_width : 0.0f);
+    bool bitmap_compatible = !wrap;
+    for (const unsigned char *character =
+            reinterpret_cast<const unsigned char *>(text);
+            *character != '\0'; ++character) {
+        if (*character >= 0x80) {
+            bitmap_compatible = false;
+            break;
+        }
+    }
+    if (!bitmap_compatible) {
+        C2D_Text parsed;
+        C2D_TextFontParse(&parsed, font_, text_buffer_, text);
+        C2D_TextOptimize(&parsed);
+        C2D_DrawText(&parsed, C2D_WithColor | (wrap ? C2D_WordWrap : 0),
+            std::floor(x + 0.5f), std::floor(y + 0.5f), 0.4f, scale, scale,
+            color, wrap ? wrap_width : 0.0f);
+        return;
+    }
+
+    const float pixel_size = scale >= 0.5f ? 2.0f : 1.0f;
+    float cursor_x = std::floor(x + 0.5f);
+    const float start_x = cursor_x;
+    float cursor_y = std::floor(y + 0.5f);
+    for (const unsigned char *character =
+            reinterpret_cast<const unsigned char *>(text);
+            *character != '\0'; ++character) {
+        if (*character == '\n') {
+            cursor_x = start_x;
+            cursor_y += pixel_size * 8.0f;
+            continue;
+        }
+        if (*character == ' ') {
+            cursor_x += pixel_size * 4.0f;
+            continue;
+        }
+        const char *glyph = bitmap_glyph(static_cast<char>(*character));
+        int first_column = 5;
+        int last_column = -1;
+        for (int row = 0; row < 7; ++row) {
+            if (*character >= 'a' && *character <= 'z' && row == 0) continue;
+            for (int column = 0; column < 5; ++column) {
+                if (glyph[row * 5 + column] == '1') {
+                    first_column = std::min(first_column, column);
+                    last_column = std::max(last_column, column);
+                }
+            }
+        }
+        if (last_column < first_column) {
+            first_column = 0;
+            last_column = 1;
+        }
+        for (int row = 0; row < 7; ++row) {
+            int column = 0;
+            while (column < 5) {
+                while (column < 5 && glyph[row * 5 + column] != '1') ++column;
+                const int start = column;
+                while (column < 5 && glyph[row * 5 + column] == '1') ++column;
+                if (start < column) {
+                    C2D_DrawRectSolid(
+                        cursor_x + (start - first_column) * pixel_size,
+                        cursor_y + row * pixel_size, 0.4f,
+                        (column - start) * pixel_size, pixel_size, color);
+                }
+            }
+        }
+        const int glyph_width = last_column - first_column + 1;
+        cursor_x += (glyph_width + 1) * pixel_size;
+    }
 }
 
 }

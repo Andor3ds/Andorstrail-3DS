@@ -101,7 +101,8 @@ private:
     void draw_panel(float x, float y, float width, float height) const;
     void draw_nine_patch(Icon icon, float x, float y, float width,
         float height) const;
-    void draw_item_icon(const std::string &item_id, float x, float y) const;
+    void draw_item_icon(const std::string &item_id, float x, float y,
+        float scale = 0.53f) const;
     void draw_bar(float x, float y, float width, int current, int maximum,
         Icon foreground) const;
     void draw_text(const char *text, float x, float y, float scale,
