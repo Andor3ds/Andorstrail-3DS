@@ -278,7 +278,8 @@ ViewTransform camera_for_player(
     const Document &document,
     GridPosition player,
     int screen_width,
-    int screen_height
+    int screen_height,
+    float scaling_factor = 1.0f
 );
 bool map_to_screen(const ViewTransform &view, GridPosition map_position, GridPosition &screen_position);
 

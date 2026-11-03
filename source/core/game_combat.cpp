@@ -1620,6 +1620,145 @@ bool player_combat_stats(GameResources *resources, const GameCore *core,
     return true;
 }
 
+bool monster_difficulty(GameResources *resources, const GameCore *core,
+    const std::string &monster_id, int &difficulty, std::string &error)
+{
+    error.clear();
+    if (resources == NULL || core == NULL || monster_id.empty()) {
+        error = "invalid monster difficulty configuration";
+        return false;
+    }
+
+    const GameResourceRecordEntry *record = game_resources_find(
+        GAME_RESOURCE_MONSTER, monster_id.c_str(), NULL
+    );
+    if (record == NULL) {
+        error = "monster record not found: " + monster_id;
+        return false;
+    }
+    GameJsonDocument document;
+    GameJsonRef monster;
+    if (!game_resources_open_record(resources, record, &document, &monster)) {
+        error = "monster combat record could not be read: " + monster_id;
+        return false;
+    }
+
+    int maximum_health = 0;
+    int maximum_action_points = 0;
+    int attack_cost = 0;
+    int attack_chance = 0;
+    int critical_skill = 0;
+    int block_chance = 0;
+    int damage_resistance = 0;
+    int damage_minimum = 0;
+    int damage_maximum = 0;
+    double critical_multiplier = 0.0;
+    const GameJsonRef damage = game_json_object_get(monster, "attackDamage");
+    const bool valid_stats =
+        read_optional_integer(monster, "maxHP", 1, maximum_health)
+        && read_optional_integer(monster, "maxAP", 10, maximum_action_points)
+        && read_optional_integer(monster, "attackCost", 10, attack_cost)
+        && read_optional_integer(monster, "attackChance", 0, attack_chance)
+        && read_optional_integer(monster, "criticalSkill", 0, critical_skill)
+        && read_optional_integer(monster, "blockChance", 0, block_chance)
+        && read_optional_integer(monster, "damageResistance", 0, damage_resistance)
+        && read_optional_number(monster, "criticalMultiplier", 0.0,
+            critical_multiplier)
+        && read_optional_integer(damage, "min", 0, damage_minimum)
+        && read_optional_integer(damage, "max", 0, damage_maximum);
+    const bool critical_immune = immune_to_critical_hits(monster);
+    game_json_dispose(&document);
+    if (!valid_stats || maximum_health <= 0 || maximum_action_points <= 0
+            || attack_cost <= 0 || damage_maximum < damage_minimum) {
+        error = "monster combat data is invalid: " + monster_id;
+        return false;
+    }
+
+    PlayerCombatStats player;
+    if (!player_combat_stats(resources, core, player, error)) return false;
+
+    struct ActorStats {
+        int maximum_health;
+        int maximum_action_points;
+        int attack_cost;
+        int attack_chance;
+        int critical_skill;
+        double critical_multiplier;
+        int damage_minimum;
+        int damage_maximum;
+        int block_chance;
+        int damage_resistance;
+        bool critical_immune;
+    };
+    const ActorStats player_stats = {
+        player.maximum_health, player.maximum_action_points, player.attack_cost,
+        player.attack_chance, player.critical_skill, player.critical_multiplier,
+        player.minimum_damage, player.maximum_damage, player.block_chance,
+        player.damage_resistance, false
+    };
+    const ActorStats monster_stats = {
+        maximum_health, maximum_action_points, attack_cost, attack_chance,
+        critical_skill, critical_multiplier, damage_minimum, damage_maximum,
+        block_chance, damage_resistance, critical_immune
+    };
+
+    const auto turns_to_kill = [](const ActorStats &attacker,
+            const ActorStats &target) {
+        const bool has_critical = attacker.critical_skill > 0
+            && attacker.critical_multiplier != 0.0
+            && attacker.critical_multiplier != 1.0
+            && !target.critical_immune;
+        if (has_critical) {
+            if (attacker.damage_maximum * attacker.critical_multiplier
+                    <= target.damage_resistance) return 999;
+        } else if (attacker.damage_maximum <= target.damage_resistance) {
+            return 999;
+        }
+
+        const int critical_chance = has_critical
+            ? effective_critical_chance(attacker.critical_skill) : 0;
+        const int hit_chance = attack_hit_chance(attacker.attack_chance,
+            target.block_chance);
+        const int outcomes = attacker.damage_maximum
+            - attacker.damage_minimum + 1;
+        double average_noncritical_damage = 0.0;
+        double average_critical_damage = 0.0;
+        for (int outcome = 0; outcome < outcomes; ++outcome) {
+            const int base_damage = outcome + attacker.damage_minimum;
+            average_noncritical_damage += std::max(0,
+                base_damage - target.damage_resistance) / static_cast<double>(outcomes);
+            if (critical_chance > 0) {
+                const int critical_damage_value = static_cast<int>(
+                    std::floor(base_damage * attacker.critical_multiplier));
+                average_critical_damage += std::max(0,
+                    critical_damage_value - target.damage_resistance)
+                    / static_cast<double>(outcomes);
+            }
+        }
+        const double average_damage_per_hit =
+            ((100 - critical_chance) * average_noncritical_damage
+                + critical_chance * average_critical_damage) / 100.0
+            * hit_chance / 100.0;
+        const double average_damage_per_turn = average_damage_per_hit
+            * (attacker.maximum_action_points / attacker.attack_cost);
+        if (average_damage_per_turn <= 0.0) return 100;
+        return static_cast<int>(std::ceil(target.maximum_health
+            / average_damage_per_turn));
+    };
+
+    const int turns_to_kill_monster = turns_to_kill(player_stats, monster_stats);
+    if (turns_to_kill_monster >= 999) {
+        difficulty = 0;
+    } else {
+        const int turns_to_kill_player = turns_to_kill(monster_stats, player_stats);
+        const int result = 50
+            + (turns_to_kill_player - turns_to_kill_monster) * 2;
+        difficulty = result <= 1 ? 1 : std::min(result, 100);
+    }
+    error.clear();
+    return true;
+}
+
 bool use_item(GameResources *resources, GameCore *core, const std::string &item_id,
     int &action_points, int maximum_action_points, int &health_change,
     std::string &error)

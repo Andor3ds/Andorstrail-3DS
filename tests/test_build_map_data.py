@@ -9,11 +9,13 @@ from pathlib import Path
 
 from tools.build_map_data import (
     ACTOR_SPRITE_SHEETS,
+    TITLE_ASSETS,
     UI_ASSETS,
     actor_icon_sheets,
     copy_map_render_assets,
     copy_map_data,
     copy_ui_assets,
+    copy_title_assets,
 )
 
 
@@ -70,6 +72,54 @@ class MapDataBuilderTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "ui_bar_background"):
                 copy_ui_assets(source.parents[1], project)
+
+            self.assertEqual(existing_asset.read_bytes(), b"existing")
+
+    def test_bundles_original_title_assets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "android"
+            for name in TITLE_ASSETS:
+                resource_dir = "drawable-nodpi" if name.startswith("ts_") else "drawable"
+                drawable = source / "res" / resource_dir
+                drawable.mkdir(parents=True, exist_ok=True)
+                (drawable / name).write_bytes(f"original-{name}".encode("ascii"))
+
+            count, byte_count = copy_title_assets(source, root / "project")
+
+            self.assertEqual(count, len(TITLE_ASSETS))
+            self.assertEqual(
+                byte_count,
+                sum(len(f"original-{name}".encode("ascii")) for name in TITLE_ASSETS),
+            )
+            for name in TITLE_ASSETS:
+                self.assertEqual(
+                    (root / "project" / "assets" / "title" / name).read_bytes(),
+                    f"original-{name}".encode("ascii"),
+                )
+            self.assertEqual(
+                (root / "project" / "romfs" / "gfx" / "title" / "title.list")
+                .read_text(encoding="ascii").splitlines(),
+                list(TITLE_ASSETS),
+            )
+
+    def test_missing_title_asset_does_not_partially_replace_bundle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "android"
+            for name in TITLE_ASSETS[1:]:
+                resource_dir = "drawable-nodpi" if name.startswith("ts_") else "drawable"
+                drawable = source / "res" / resource_dir
+                drawable.mkdir(parents=True, exist_ok=True)
+                (drawable / name).write_bytes(b"existing source")
+            project = root / "project"
+            asset_directory = project / "assets" / "title"
+            asset_directory.mkdir(parents=True)
+            existing_asset = asset_directory / TITLE_ASSETS[0]
+            existing_asset.write_bytes(b"existing")
+
+            with self.assertRaisesRegex(ValueError, "ts_background.png"):
+                copy_title_assets(source, project)
 
             self.assertEqual(existing_asset.read_bytes(), b"existing")
 

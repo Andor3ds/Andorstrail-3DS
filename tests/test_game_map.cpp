@@ -97,6 +97,28 @@ int main(int argc, char **argv)
     assert(!andortrail::map::find_path_step(path_map, {1, 1}, {1, 1},
         std::function<bool(GridPosition)>(), next_step));
 
+    Document diagonal_map;
+    diagonal_map.width = 3;
+    diagonal_map.height = 3;
+    Layer diagonal_walkable;
+    diagonal_walkable.name = "walkable";
+    diagonal_walkable.gids.assign(9, 0);
+    diagonal_map.layers.push_back(diagonal_walkable);
+    GridPosition diagonal_player = {1, 1};
+    assert(andortrail::map::move_player(diagonal_map, diagonal_player, 1, -1));
+    assert(diagonal_player.x == 2 && diagonal_player.y == 0);
+    diagonal_walkable.gids[2 * 3 + 1] = 1;
+    diagonal_map.layers[0] = diagonal_walkable;
+    diagonal_player = {1, 1};
+    assert(andortrail::map::move_player(diagonal_map, diagonal_player, 1, -1));
+    assert(diagonal_player.x == 2 && diagonal_player.y == 0);
+    diagonal_walkable.gids[0] = 1;
+    diagonal_map.layers[0] = diagonal_walkable;
+    diagonal_player = {1, 1};
+    assert(!andortrail::map::move_player(diagonal_map, diagonal_player, -1, -1));
+    assert(diagonal_player.x == 1 && diagonal_player.y == 1);
+    assert(!andortrail::map::move_player(diagonal_map, diagonal_player, 0, 0));
+
     for (int step = 0; step < 6; ++step) {
         assert(andortrail::map::move_player(home, player, 1, 0));
     }
@@ -114,6 +136,22 @@ int main(int argc, char **argv)
     assert(player_screen.x == 40 && player_screen.y == 104);
     GridPosition outside_screen = {-1, -1};
     assert(!andortrail::map::map_to_screen(view, {1, 9}, outside_screen));
+
+    Document zoom_map = {};
+    zoom_map.width = 40;
+    zoom_map.height = 30;
+    zoom_map.tile_width = 32;
+    const ViewTransform zoomed_out =
+        andortrail::map::camera_for_player(zoom_map, {20, 15}, 400, 240, 0.5f);
+    assert(zoomed_out.tile_size == 16);
+    assert(zoomed_out.visible_columns == 25 && zoomed_out.visible_rows == 15);
+    assert(zoomed_out.camera_x == 8 && zoomed_out.camera_y == 8);
+    const ViewTransform zoomed_in =
+        andortrail::map::camera_for_player(zoom_map, {20, 15}, 400, 240, 2.0f);
+    assert(zoomed_in.tile_size == 64);
+    assert(zoomed_in.visible_columns == 6 && zoomed_in.visible_rows == 3);
+    assert(zoomed_in.camera_x == 17 && zoomed_in.camera_y == 14);
+    assert(zoomed_in.screen_offset_x == 8 && zoomed_in.screen_offset_y == 24);
 
     Document crossglen;
     assert(load_tmx(directory + "/crossglen.tmx", "crossglen", false, crossglen, &error));

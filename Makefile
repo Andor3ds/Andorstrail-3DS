@@ -60,7 +60,7 @@ $(BUILD):
 
 clean:
 	@rm -rf $(BUILD) $(TARGET).elf $(TARGET).3dsx $(TARGET).smdh $(TARGET).lst $(TARGET).map
-	@rm -f $(ROMFS)/gfx/*.t3x $(ROMFS)/gfx/ui/*.t3x
+	@rm -f $(ROMFS)/gfx/*.t3x $(ROMFS)/gfx/ui/*.t3x $(ROMFS)/gfx/title/*.t3x
 
 test: $(BUILD)/host-tests/test_game_json $(BUILD)/host-tests/test_game_resources $(BUILD)/host-tests/test_game_map $(BUILD)/host-tests/test_game_interactions $(BUILD)/host-tests/test_game_core
 	$(BUILD)/host-tests/test_game_json
@@ -106,12 +106,16 @@ MAP_ROMFS_FILES := $(wildcard $(PROJECT_ROOT)/$(ROMFS)/maps/*.tmx) \
 				   $(PROJECT_ROOT)/$(ROMFS)/maps/maps.list
 MAP_T3X_FILES := $(patsubst $(PROJECT_ROOT)/assets/map/home/%.png,$(PROJECT_ROOT)/$(ROMFS)/gfx/%.t3x,$(wildcard $(PROJECT_ROOT)/assets/map/home/*.png))
 UI_T3X_FILES := $(patsubst $(PROJECT_ROOT)/assets/ui/%.png,$(PROJECT_ROOT)/$(ROMFS)/gfx/ui/%.t3x,$(wildcard $(PROJECT_ROOT)/assets/ui/*.png))
-$(OUTPUT).3dsx: $(OUTPUT).elf $(OUTPUT).smdh $(PROJECT_ROOT)/$(ROMFS)/game_data.pack $(MAP_ROMFS_FILES) $(PROJECT_ROOT)/$(ROMFS)/gfx/tilesets.list $(MAP_T3X_FILES) $(PROJECT_ROOT)/$(ROMFS)/gfx/ui/ui.list $(UI_T3X_FILES)
+TITLE_T3X_FILES := $(patsubst $(PROJECT_ROOT)/assets/title/%.png,$(PROJECT_ROOT)/$(ROMFS)/gfx/title/%.t3x,$(wildcard $(PROJECT_ROOT)/assets/title/*.png))
+$(OUTPUT).3dsx: $(OUTPUT).elf $(OUTPUT).smdh $(PROJECT_ROOT)/$(ROMFS)/game_data.pack $(MAP_ROMFS_FILES) $(PROJECT_ROOT)/$(ROMFS)/gfx/tilesets.list $(MAP_T3X_FILES) $(PROJECT_ROOT)/$(ROMFS)/gfx/ui/ui.list $(UI_T3X_FILES) $(PROJECT_ROOT)/$(ROMFS)/gfx/title/title.list $(TITLE_T3X_FILES)
 $(OUTPUT).elf: $(OFILES)
 $(PROJECT_ROOT)/$(ROMFS)/gfx/%.t3x: $(PROJECT_ROOT)/assets/map/home/%.png
 	@mkdir -p $(dir $@)
 	tex3ds -f rgba8888 -z auto -o $@ $<
 $(PROJECT_ROOT)/$(ROMFS)/gfx/ui/%.t3x: $(PROJECT_ROOT)/assets/ui/%.png
+	@mkdir -p $(dir $@)
+	tex3ds -f rgba8888 -z auto -o $@ $<
+$(PROJECT_ROOT)/$(ROMFS)/gfx/title/%.t3x: $(PROJECT_ROOT)/assets/title/%.png
 	@mkdir -p $(dir $@)
 	tex3ds -f rgba8888 -z auto -o $@ $<
 -include $(DEPENDS)

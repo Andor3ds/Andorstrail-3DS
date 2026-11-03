@@ -26,10 +26,12 @@ public:
         GameResources *resources, GameCore *core, std::string &error);
     bool persist_state(std::string &error);
     void dispose();
-    void draw(int screen_width, int screen_height) const;
+    void draw(int screen_width, int screen_height,
+        float scaling_factor = 1.0f) const;
     void draw_player_portrait(float x, float y, float depth) const;
     void update(std::uint64_t current_time_ms);
     bool move_player(int dx, int dy);
+    bool move_player_toward(map::GridPosition destination);
     bool interact();
     bool can_talk_to_mikhail() const;
     bool can_shop_with_mara() const;
@@ -49,6 +51,12 @@ public:
     int displayed_player_action_points() const;
     int maximum_player_action_points() const;
     bool has_modal_interaction() const;
+    bool has_encounter() const;
+    bool has_encounter_info() const;
+    int selected_encounter_option() const;
+    void move_encounter_selection(int direction);
+    bool choose_encounter_option(int option);
+    void return_to_encounter();
     void dismiss_modal_interaction();
     bool has_conversation() const;
     bool has_shop() const;
@@ -59,7 +67,8 @@ public:
     bool choose_conversation_reply(std::string &error);
     const std::string &interaction_message() const;
     map::GridPosition player_position() const;
-    map::ViewTransform camera(int screen_width, int screen_height) const;
+    map::ViewTransform camera(int screen_width, int screen_height,
+        float scaling_factor = 1.0f) const;
     bool player_walkable() const;
     const char *map_id() const;
 
@@ -101,6 +110,8 @@ private:
     bool validate_visible_layers(const map::Document &document, std::string &error) const;
     bool handle_map_event(const map::Event &event, map::GridPosition entered,
         std::string &error);
+    bool interact_with_mikhail();
+    bool interact_with_mara();
     bool transition(const map::Event &event, map::GridPosition entered,
         std::string &error);
     void show_sign(const map::Event &event);
@@ -135,22 +146,24 @@ private:
     void advance_monster_turn(std::uint64_t current_time_ms);
     void finish_monster_turn(std::string &message);
     bool check_monster_aggression();
-    void begin_combat_with_enemy(EnemyState &enemy);
+    void begin_encounter_with_enemy(EnemyState &enemy);
     void update_enemy_turn(EnemyState &enemy, std::string &message);
     bool enemy_should_move_in_combat(const EnemyState &enemy) const;
     bool has_adjacent_aggressive_enemy() const;
+    bool npc_at(map::GridPosition position) const;
     bool enemy_at(map::GridPosition position) const;
     bool enemy_can_move_to(const EnemyState &enemy,
         map::GridPosition position) const;
     bool find_enemy_path_step(const EnemyState &enemy,
         map::GridPosition destination, map::GridPosition &next_step) const;
     void draw_layer(const std::string &name, const map::ViewTransform &view,
-        float depth) const;
-    void draw_gid(std::uint32_t gid, int screen_x, int screen_y, float depth) const;
+        float depth, float scale) const;
+    void draw_gid(std::uint32_t gid, int screen_x, int screen_y, float depth,
+        float scale) const;
     void draw_actor_icon(const char *sheet_name, std::uint32_t icon_index,
         map::GridPosition position, const map::ViewTransform &view, float depth) const;
     void draw_actor_icon_at(const char *sheet_name, std::uint32_t icon_index,
-        float x, float y, float depth) const;
+        float x, float y, float depth, float scale = 1.0f) const;
 
     map::Document document_;
     map::TranslatedDocument translated_;
@@ -185,6 +198,11 @@ private:
     int player_reequip_cost_;
     bool combat_active_;
     bool monster_turn_active_;
+    bool encounter_pending_;
+    bool encounter_info_open_;
+    int encounter_selection_;
+    std::string encounter_difficulty_;
+    std::string declined_enemy_instance_id_;
     std::string active_combat_enemy_id_;
     std::uint64_t next_combat_enemy_action_ms_;
     std::size_t combat_enemy_actions_;

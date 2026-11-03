@@ -60,6 +60,8 @@ struct PlayerCombatStats {
 
 bool player_combat_stats(GameResources *resources, const GameCore *core,
     PlayerCombatStats &stats, std::string &error);
+bool monster_difficulty(GameResources *resources, const GameCore *core,
+    const std::string &monster_id, int &difficulty, std::string &error);
 bool use_item(GameResources *resources, GameCore *core, const std::string &item_id,
     int &action_points, int maximum_action_points, int &health_change,
     std::string &error);

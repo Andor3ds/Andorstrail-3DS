@@ -805,6 +805,16 @@ static void test_equipped_combat_stats(GameResources *resources)
         &dual_wield_core, stats, error));
     assert(stats.attack_chance == dual_wield_core.attack_chance + 16);
     assert(stats.damage_resistance == 0);
+
+    GameCore difficulty_core;
+    game_core_init(&difficulty_core);
+    int difficulty = -1;
+    assert(andortrail::combat::monster_difficulty(resources, &difficulty_core,
+        "tiny_rat", difficulty, error));
+    assert(difficulty >= 0 && difficulty <= 100);
+    assert(!andortrail::combat::monster_difficulty(resources, &difficulty_core,
+        "missing_monster", difficulty, error));
+    assert(!error.empty());
 }
 
 static void test_inventory_actions(GameResources *resources)

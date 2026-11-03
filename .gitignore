@@ -8,3 +8,4 @@ __pycache__/
 *.py[cod]
 /romfs/gfx/*.t3x
 /romfs/gfx/ui/*.t3x
+/romfs/gfx/title/*.t3x

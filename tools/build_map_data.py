@@ -57,6 +57,12 @@ UI_ASSETS = (
     "char_hero_large.png",
     "equip_square.png",
 )
+TITLE_ASSETS = (
+    "ts_background.png",
+    "ts_midground.png",
+    "ts_foreground.png",
+    "logo_anim_shine_00.png",
+)
 
 def copy_map_data(source_root: Path, project_root: Path) -> tuple[int, int]:
     xml_root = source_root / "res" / "xml"
@@ -320,6 +326,37 @@ def copy_ui_assets(source_root: Path, project_root: Path) -> tuple[int, int]:
     return len(UI_ASSETS), byte_count
 
 
+def copy_title_assets(source_root: Path, project_root: Path) -> tuple[int, int]:
+    source_directories = {
+        name: source_root / "res" / (
+            "drawable-nodpi" if name.startswith("ts_") else "drawable"
+        )
+        for name in TITLE_ASSETS
+    }
+    missing = [
+        name for name in TITLE_ASSETS
+        if not (source_directories[name] / name).is_file()
+    ]
+    if missing:
+        raise ValueError("original Android title assets are missing: " + ", ".join(missing))
+
+    asset_directory = project_root / "assets" / "title"
+    gfx_directory = project_root / "romfs" / "gfx" / "title"
+    asset_directory.mkdir(parents=True, exist_ok=True)
+    gfx_directory.mkdir(parents=True, exist_ok=True)
+    byte_count = 0
+    for name in TITLE_ASSETS:
+        source_path = source_directories[name] / name
+        target_path = asset_directory / name
+        if source_path.resolve() != target_path.resolve():
+            shutil.copyfile(source_path, target_path)
+        byte_count += target_path.stat().st_size
+    (gfx_directory / "title.list").write_text(
+        "".join(f"{name}\n" for name in TITLE_ASSETS), encoding="ascii"
+    )
+    return len(TITLE_ASSETS), byte_count
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True, help="Android Andor's Trail project root")
@@ -345,6 +382,8 @@ def main() -> None:
     print(f"Bundled original map/player/actor images for {', '.join(arguments.render_maps)} ({image_count} images, {image_bytes} bytes)")
     ui_count, ui_bytes = copy_ui_assets(arguments.source, arguments.project)
     print(f"Bundled {ui_count} original Android UI images ({ui_bytes} bytes)")
+    title_count, title_bytes = copy_title_assets(arguments.source, arguments.project)
+    print(f"Bundled {title_count} original Android title images ({title_bytes} bytes)")
 
 
 if __name__ == "__main__":

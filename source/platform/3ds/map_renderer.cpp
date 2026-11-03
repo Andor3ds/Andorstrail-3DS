@@ -164,6 +164,16 @@ bool string_equals_ignore_case(const std::string &left, const std::string &right
     return true;
 }
 
+const char *monster_difficulty_name(int difficulty)
+{
+    if (difficulty >= 80) return "Very easy";
+    if (difficulty >= 60) return "Easy";
+    if (difficulty >= 40) return "Normal";
+    if (difficulty >= 20) return "Hard";
+    if (difficulty == 0) return "Impossible";
+    return "Very hard";
+}
+
 }
 
 MapRenderer::MapRenderer()
@@ -176,6 +186,8 @@ MapRenderer::MapRenderer()
       player_attack_cost_(4), player_move_cost_(6), player_use_item_cost_(5),
       player_reequip_cost_(5),
       combat_active_(false), monster_turn_active_(false),
+      encounter_pending_(false), encounter_info_open_(false),
+      encounter_selection_(0),
       next_combat_enemy_action_ms_(0), combat_enemy_actions_(0),
       next_respawn_check_ms_(0),
       last_round_update_ms_(0), round_tick_accumulator_ms_(0),
@@ -210,6 +222,11 @@ void MapRenderer::dispose()
     player_image_ = {NULL, NULL};
     modal_interaction_ = false;
     shop_interaction_ = false;
+    encounter_pending_ = false;
+    encounter_info_open_ = false;
+    encounter_selection_ = 0;
+    encounter_difficulty_.clear();
+    declined_enemy_instance_id_.clear();
     enemies_.clear();
     spawn_candidates_.clear();
     spawn_area_unique_.clear();
@@ -225,6 +242,11 @@ void MapRenderer::dispose()
     player_reequip_cost_ = 5;
     combat_active_ = false;
     monster_turn_active_ = false;
+    encounter_pending_ = false;
+    encounter_info_open_ = false;
+    encounter_selection_ = 0;
+    encounter_difficulty_.clear();
+    declined_enemy_instance_id_.clear();
     active_combat_enemy_id_.clear();
     next_combat_enemy_action_ms_ = 0;
     combat_enemy_actions_ = 0;
@@ -565,6 +587,7 @@ bool MapRenderer::initialize_enemies(std::string &error)
         if (saved.health <= 0
                 || !monster_can_move_to(document_, translated_,
                     {saved.x, saved.y}, area.ignore_areas)
+                || npc_at({saved.x, saved.y})
                 || (saved.x == player_.x && saved.y == player_.y)
                 || enemy_at({saved.x, saved.y})) {
             error = "saved monster position or health is invalid: "
@@ -626,8 +649,9 @@ bool MapRenderer::initialize_enemies(std::string &error)
                     game_core_random(core_,
                         static_cast<uint32_t>(area.tile_rect.height)));
                 if ((position.x == player_.x && position.y == player_.y)
-                        || !monster_can_move_to(document_, translated_,
-                            position, area.ignore_areas)
+                        || npc_at(position)
+                            || !monster_can_move_to(document_, translated_,
+                                position, area.ignore_areas)
                         || enemy_at(position)) continue;
                 found_position = true;
                 break;
@@ -1121,11 +1145,26 @@ bool MapRenderer::enemy_at(map::GridPosition position) const
     return false;
 }
 
+bool MapRenderer::npc_at(map::GridPosition position) const
+{
+    for (std::size_t index = 0; index < translated_.spawn_areas.size(); ++index) {
+        if (index >= spawn_area_has_npc_.size()
+                || !spawn_area_has_npc_[index]) continue;
+        map::GridPosition npc_position;
+        if (spawn_position(document_, translated_,
+                translated_.spawn_areas[index].spawn_group, 0,
+                npc_position)
+                && npc_position.x == position.x
+                && npc_position.y == position.y) return true;
+    }
+    return false;
+}
+
 bool MapRenderer::enemy_can_move_to(const EnemyState &enemy,
     map::GridPosition position) const
 {
     if (!monster_can_move_to(document_, translated_, position,
-            enemy.ignore_areas)) return false;
+            enemy.ignore_areas) || npc_at(position)) return false;
     for (const EnemyState &other : enemies_) {
         if (&other != &enemy && other.health > 0
                 && other.position.x == position.x
@@ -1165,6 +1204,18 @@ void MapRenderer::update(std::uint64_t current_time_ms)
 
     if (world_active) update_enemies(current_time_ms);
     if (!world_active || combat_active_ || modal_interaction_) return;
+    if (!declined_enemy_instance_id_.empty()) {
+        bool still_adjacent = false;
+        for (const EnemyState &enemy : enemies_) {
+            if (enemy.instance_id == declined_enemy_instance_id_
+                    && enemy.aggressive
+                    && map::is_adjacent(player_, enemy.position)) {
+                still_adjacent = true;
+                break;
+            }
+        }
+        if (!still_adjacent) declined_enemy_instance_id_.clear();
+    }
 
     while (round_tick_accumulator_ms_ >= GAME_ROUND_TICK_DURATION_MS) {
         round_tick_accumulator_ms_ -= GAME_ROUND_TICK_DURATION_MS;
@@ -1250,7 +1301,14 @@ void MapRenderer::update_enemies(std::uint64_t current_time_ms)
         else next = map::step_toward(enemy.position, enemy.destination);
         if (next.x == player_.x && next.y == player_.y) {
             if (enemy.aggressive) {
-                begin_combat_with_enemy(enemy);
+                if (enemy.instance_id == declined_enemy_instance_id_) {
+                    enemy.has_destination = false;
+                    enemy.next_action_time_ms = current_time_ms
+                        + movement_interval_ms
+                            * (1 + game_core_random(core_, 5));
+                    continue;
+                }
+                begin_encounter_with_enemy(enemy);
                 return;
             }
             enemy.has_destination = false;
@@ -1275,31 +1333,39 @@ bool MapRenderer::check_monster_aggression()
     const int aggression_chance = std::max(0,
         15 - game_core_skill_level(core_, "evasion") * 5);
     for (EnemyState &enemy : enemies_) {
-        if (!enemy.aggressive || !map::is_adjacent(player_, enemy.position)) {
+        if (!enemy.aggressive || !map::is_adjacent(player_, enemy.position)
+                || enemy.instance_id == declined_enemy_instance_id_) {
             continue;
         }
         if (game_core_random(core_, 100)
                 < static_cast<std::uint32_t>(aggression_chance)) {
-            begin_combat_with_enemy(enemy);
+            begin_encounter_with_enemy(enemy);
             return true;
         }
     }
     return false;
 }
 
-void MapRenderer::begin_combat_with_enemy(EnemyState &enemy)
+void MapRenderer::begin_encounter_with_enemy(EnemyState &enemy)
 {
-    combat_active_ = true;
-    player_action_points_ = maximum_player_action_points_;
-    selected_enemy_instance_id_ = enemy.instance_id;
-    interaction_message_ = enemy.name + " engaged you.";
-    resolve_monster_turn(interaction_message_, true);
-    modal_interaction_ = core_ == NULL || core_->health <= 0;
+    int difficulty = 0;
     std::string error;
-    if (!persist_current_map_state(false, error)) {
-        interaction_message_ += "\nCombat state could not be saved: " + error;
+    if (!combat::monster_difficulty(resources_, core_, enemy.monster_id,
+            difficulty, error)) {
+        interaction_message_ = "Encounter information unavailable: " + error;
         modal_interaction_ = true;
+        return;
     }
+
+    encounter_pending_ = true;
+    encounter_info_open_ = false;
+    encounter_selection_ = 0;
+    encounter_difficulty_ = monster_difficulty_name(difficulty);
+    selected_enemy_instance_id_ = enemy.instance_id;
+    interaction_message_ = enemy.name
+        + "\nDo you want to attack?\nDifficulty: " + encounter_difficulty_;
+    shop_interaction_ = false;
+    modal_interaction_ = true;
 }
 
 bool MapRenderer::update_spawn_areas(std::uint64_t current_time_ms,
@@ -2154,6 +2220,11 @@ bool MapRenderer::transition(const map::Event &event, map::GridPosition entered,
     if (!initialize_enemies(error)) return false;
     interaction_message_.clear();
     modal_interaction_ = false;
+    encounter_pending_ = false;
+    encounter_info_open_ = false;
+    encounter_selection_ = 0;
+    encounter_difficulty_.clear();
+    declined_enemy_instance_id_.clear();
     error.clear();
     return true;
 }
@@ -2261,24 +2332,21 @@ static bool key_requirement_met(const map::Requirement &requirement, const GameC
 bool MapRenderer::move_player(int dx, int dy)
 {
     if (!initialized_ || modal_interaction_ || monster_turn_active_) return false;
+    if (!combat_active_) {
+        for (EnemyState &enemy : enemies_) {
+            if (enemy.aggressive && map::is_adjacent(player_, enemy.position)
+                    && enemy.instance_id != declined_enemy_instance_id_) {
+                begin_encounter_with_enemy(enemy);
+                return false;
+            }
+        }
+    }
     const map::GridPosition previous = player_;
     map::GridPosition next = player_;
     if (!map::move_player(document_, next, dx, dy)) return false;
 
-    map::GridPosition actor_position;
-    if (document_.name == "home"
-            && spawn_position(document_, translated_, "mikhail", 0, actor_position)
-            && next.x == actor_position.x && next.y == actor_position.y) {
-        return false;
-    }
-    if (enemy_at(next)) return false;
+    if (npc_at(next) || enemy_at(next)) return false;
 
-    const bool starting_combat = !combat_active_ && has_adjacent_aggressive_enemy();
-    if (starting_combat) {
-        combat_active_ = true;
-        player_action_points_ = maximum_player_action_points_;
-        select_adjacent_enemy_if_needed();
-    }
     if (combat_active_) {
         if (player_action_points_ < player_move_cost_) {
             interaction_message_ = "Not enough AP to move.";
@@ -2323,12 +2391,57 @@ bool MapRenderer::move_player(int dx, int dy)
         combat_action_completed(action_message);
         if (!action_message.empty()) interaction_message_ = action_message;
         modal_interaction_ = core_->health <= 0;
-    } else if (has_adjacent_aggressive_enemy()) {
-        combat_active_ = true;
-        player_action_points_ = maximum_player_action_points_;
-        select_adjacent_enemy_if_needed();
+    } else {
+        map::GridPosition npc_position;
+        if (document_.name == "home"
+                && spawn_position(document_, translated_, "mikhail", 0,
+                    npc_position)
+                && !map::is_adjacent(previous, npc_position)
+                && map::is_adjacent(player_, npc_position)) {
+            interact_with_mikhail();
+            return true;
+        }
+        if (document_.name == "crossglen_hall"
+                && spawn_position(document_, translated_, "Mara", 0,
+                    npc_position)
+                && !map::is_adjacent(previous, npc_position)
+                && map::is_adjacent(player_, npc_position)) {
+            interact_with_mara();
+            return true;
+        }
+        if (!declined_enemy_instance_id_.empty()) {
+            bool still_adjacent = false;
+            for (const EnemyState &enemy : enemies_) {
+                if (enemy.instance_id == declined_enemy_instance_id_
+                        && enemy.aggressive
+                        && map::is_adjacent(player_, enemy.position)) {
+                    still_adjacent = true;
+                    break;
+                }
+            }
+            if (!still_adjacent) declined_enemy_instance_id_.clear();
+        }
+        for (EnemyState &enemy : enemies_) {
+            if (enemy.aggressive && map::is_adjacent(player_, enemy.position)
+                    && enemy.instance_id != declined_enemy_instance_id_) {
+                begin_encounter_with_enemy(enemy);
+                break;
+            }
+        }
     }
     return true;
+}
+
+bool MapRenderer::move_player_toward(map::GridPosition destination)
+{
+    map::GridPosition next_step = player_;
+    const bool found_step = map::find_path_step(document_, player_, destination,
+        [this](map::GridPosition position) {
+            if (npc_at(position) || enemy_at(position)) return false;
+            return true;
+        }, next_step);
+    if (!found_step) return false;
+    return move_player(next_step.x - player_.x, next_step.y - player_.y);
 }
 
 bool MapRenderer::interact()
@@ -2344,34 +2457,10 @@ bool MapRenderer::interact()
         return true;
     }
     if (can_shop_with_mara()) {
-        int bread_price = 0;
-        std::string error;
-        if (!items::item_price(resources_, "bread", bread_price, error)) {
-            interaction_message_ = "Mara's shop: " + error;
-            shop_interaction_ = true;
-            modal_interaction_ = true;
-            return false;
-        }
-        std::ostringstream message;
-        message << "Mara's shop\nBread: " << bread_price
-            << " gold\nYour gold: " << game_core_inventory_count(core_, "gold");
-        interaction_message_ = message.str();
-        shop_interaction_ = true;
-        modal_interaction_ = true;
-        return true;
+        return interact_with_mara();
     }
     if (can_talk_to_mikhail()) {
-        std::string error;
-        if (!conversation_.start("mikhail_start_select", error)) {
-            interaction_message_ = "Mikhail: " + error;
-            modal_interaction_ = true;
-            return false;
-        }
-        selected_conversation_reply_ = 0;
-        interaction_message_ = "Mikhail\n" + conversation_.message();
-        shop_interaction_ = false;
-        modal_interaction_ = true;
-        return true;
+        return interact_with_mikhail();
     }
     interaction_message_.clear();
     shop_interaction_ = false;
@@ -2384,7 +2473,7 @@ bool MapRenderer::can_talk_to_mikhail() const
     if (!initialized_ || modal_interaction_ || document_.name != "home") return false;
     map::GridPosition mikhail;
     return spawn_position(document_, translated_, "mikhail", 0, mikhail)
-        && distance_to_tile(player_, mikhail) <= 2;
+        && map::is_adjacent(player_, mikhail);
 }
 
 bool MapRenderer::can_shop_with_mara() const
@@ -2392,7 +2481,41 @@ bool MapRenderer::can_shop_with_mara() const
     if (!initialized_ || modal_interaction_ || document_.name != "crossglen_hall") return false;
     map::GridPosition mara;
     return spawn_position(document_, translated_, "Mara", 0, mara)
-        && distance_to_tile(player_, mara) <= 1;
+        && map::is_adjacent(player_, mara);
+}
+
+bool MapRenderer::interact_with_mikhail()
+{
+    std::string error;
+    if (!conversation_.start("mikhail_start_select", error)) {
+        interaction_message_ = "Mikhail: " + error;
+        modal_interaction_ = true;
+        return false;
+    }
+    selected_conversation_reply_ = 0;
+    interaction_message_ = "Mikhail\n" + conversation_.message();
+    shop_interaction_ = false;
+    modal_interaction_ = true;
+    return true;
+}
+
+bool MapRenderer::interact_with_mara()
+{
+    int bread_price = 0;
+    std::string error;
+    if (!items::item_price(resources_, "bread", bread_price, error)) {
+        interaction_message_ = "Mara's shop: " + error;
+        shop_interaction_ = true;
+        modal_interaction_ = true;
+        return false;
+    }
+    std::ostringstream message;
+    message << "Mara's shop\nBread: " << bread_price
+        << " gold\nYour gold: " << game_core_inventory_count(core_, "gold");
+    interaction_message_ = message.str();
+    shop_interaction_ = true;
+    modal_interaction_ = true;
+    return true;
 }
 
 const char *MapRenderer::nearby_interaction_hint() const
@@ -2405,7 +2528,7 @@ const char *MapRenderer::nearby_interaction_hint() const
     }
     if (can_talk_to_mikhail()) return "MIKHAIL NEARBY - A: TALK";
     if (can_shop_with_mara()) return "MARA'S SHOP - A: BUY";
-    if (has_adjacent_aggressive_enemy()) return "ENEMY NEARBY - A: ATTACK";
+    if (has_adjacent_aggressive_enemy()) return "ENEMY NEARBY - A: ENCOUNTER";
     return "";
 }
 
@@ -2509,8 +2632,8 @@ bool MapRenderer::attack_nearby_enemy()
     }
 
     if (!combat_active_) {
-        combat_active_ = true;
-        player_action_points_ = maximum_player_action_points_;
+        begin_encounter_with_enemy(enemies_[target_index]);
+        return true;
     }
     if (player_action_points_ < player_attack_cost_) {
         interaction_message_ = "Not enough AP to attack.";
@@ -2592,8 +2715,95 @@ bool MapRenderer::has_modal_interaction() const
     return modal_interaction_;
 }
 
+bool MapRenderer::has_encounter() const
+{
+    return encounter_pending_;
+}
+
+bool MapRenderer::has_encounter_info() const
+{
+    return encounter_pending_ && encounter_info_open_;
+}
+
+int MapRenderer::selected_encounter_option() const
+{
+    return encounter_selection_;
+}
+
+void MapRenderer::move_encounter_selection(int direction)
+{
+    if (!encounter_pending_ || encounter_info_open_ || direction == 0) return;
+    encounter_selection_ = (encounter_selection_ + (direction < 0 ? 2 : 1)) % 3;
+}
+
+bool MapRenderer::choose_encounter_option(int option)
+{
+    if (!encounter_pending_ || encounter_info_open_
+            || option < 0 || option >= 3) return false;
+    encounter_selection_ = option;
+    if (option == 1) {
+        for (const EnemyState &enemy : enemies_) {
+            if (enemy.instance_id != selected_enemy_instance_id_) continue;
+            std::ostringstream info;
+            info << enemy.name << "\nHP: " << enemy.health << "/"
+                << enemy.maximum_health << "\nAP: "
+                << enemy.maximum_action_points << "\nDifficulty: "
+                << encounter_difficulty_;
+            interaction_message_ = info.str();
+            encounter_info_open_ = true;
+            return true;
+        }
+        interaction_message_ = "Encounter information unavailable.";
+        return false;
+    }
+    if (option == 2) {
+        declined_enemy_instance_id_ = selected_enemy_instance_id_;
+        encounter_pending_ = false;
+        encounter_info_open_ = false;
+        modal_interaction_ = false;
+        interaction_message_.clear();
+        encounter_selection_ = 0;
+        encounter_difficulty_.clear();
+        return true;
+    }
+
+    encounter_pending_ = false;
+    encounter_info_open_ = false;
+    modal_interaction_ = false;
+    shop_interaction_ = false;
+    combat_active_ = true;
+    player_action_points_ = maximum_player_action_points_;
+    declined_enemy_instance_id_.clear();
+    interaction_message_.clear();
+    encounter_selection_ = 0;
+    encounter_difficulty_.clear();
+    select_adjacent_enemy_if_needed();
+    return true;
+}
+
+void MapRenderer::return_to_encounter()
+{
+    if (!encounter_pending_ || !encounter_info_open_) return;
+    encounter_info_open_ = false;
+    for (const EnemyState &enemy : enemies_) {
+        if (enemy.instance_id != selected_enemy_instance_id_) continue;
+        interaction_message_ = enemy.name
+            + "\nDo you want to attack?\nDifficulty: " + encounter_difficulty_;
+        return;
+    }
+    interaction_message_ = "Encounter information unavailable.";
+}
+
 void MapRenderer::dismiss_modal_interaction()
 {
+    if (encounter_info_open_) {
+        return_to_encounter();
+        return;
+    }
+    if (encounter_pending_) {
+        choose_encounter_option(2);
+        return;
+    }
     conversation_.close();
     modal_interaction_ = false;
     interaction_message_.clear();
@@ -2682,7 +2892,8 @@ const std::string &MapRenderer::interaction_message() const
 void MapRenderer::draw_layer(
     const std::string &name,
     const map::ViewTransform &view,
-    float depth
+    float depth,
+    float scale
 ) const
 {
     const map::Layer *layer = map::find_layer(document_, name);
@@ -2693,12 +2904,13 @@ void MapRenderer::draw_layer(
             if (gid == 0) continue;
             map::GridPosition screen;
             if (!map::map_to_screen(view, {x, y}, screen)) continue;
-            draw_gid(gid, screen.x, screen.y, depth);
+            draw_gid(gid, screen.x, screen.y, depth, scale);
         }
     }
 }
 
-void MapRenderer::draw_gid(std::uint32_t gid, int screen_x, int screen_y, float depth) const
+void MapRenderer::draw_gid(std::uint32_t gid, int screen_x, int screen_y,
+    float depth, float scale) const
 {
     map::TileSource source;
     if (!map::resolve_tile_source(document_, gid, source)) return;
@@ -2711,7 +2923,8 @@ void MapRenderer::draw_gid(std::uint32_t gid, int screen_x, int screen_y, float 
             || source.local_id >= tiles->second.size()) return;
     C2D_Image image = C2D_SpriteSheetGetImage(sheets_[sheet->second], 0);
     image.subtex = &tiles->second[source.local_id];
-    C2D_DrawImageAt(image, static_cast<float>(screen_x), static_cast<float>(screen_y), depth, NULL);
+    C2D_DrawImageAt(image, static_cast<float>(screen_x),
+        static_cast<float>(screen_y), depth, NULL, scale, scale);
 }
 
 void MapRenderer::draw_actor_icon(
@@ -2724,12 +2937,15 @@ void MapRenderer::draw_actor_icon(
 {
     map::GridPosition screen;
     if (!map::map_to_screen(view, position, screen)) return;
+    const float scale = view.tile_size
+        / static_cast<float>(document_.tile_width > 0
+            ? document_.tile_width : 32);
     draw_actor_icon_at(sheet_name, icon_index,
-        static_cast<float>(screen.x), static_cast<float>(screen.y), depth);
+        static_cast<float>(screen.x), static_cast<float>(screen.y), depth, scale);
 }
 
 void MapRenderer::draw_actor_icon_at(const char *sheet_name,
-    std::uint32_t icon_index, float x, float y, float depth) const
+    std::uint32_t icon_index, float x, float y, float depth, float scale) const
 {
     const std::map<std::string, std::size_t>::const_iterator sheet =
         image_indices_.find(sheet_name);
@@ -2755,7 +2971,7 @@ void MapRenderer::draw_actor_icon_at(const char *sheet_name,
 
     C2D_Image image = whole;
     image.subtex = &subtexture;
-    C2D_DrawImageAt(image, x, y, depth, NULL);
+    C2D_DrawImageAt(image, x, y, depth, NULL, scale, scale);
 }
 
 void MapRenderer::draw_selected_combat_target_icon(float x, float y,
@@ -2776,15 +2992,19 @@ void MapRenderer::draw_selected_combat_target_icon(float x, float y,
         first_adjacent->icon_index, x, y, depth);
 }
 
-void MapRenderer::draw(int screen_width, int screen_height) const
+void MapRenderer::draw(int screen_width, int screen_height,
+    float scaling_factor) const
 {
     if (!initialized_) return;
     const map::ViewTransform view = map::camera_for_player(
-        document_, player_, screen_width, screen_height
+        document_, player_, screen_width, screen_height, scaling_factor
     );
-    draw_layer("base", view, 0.5f);
-    draw_layer("ground", view, 0.5f);
-    draw_layer("objects", view, 0.5f);
+    const float tile_scale = view.tile_size
+        / static_cast<float>(document_.tile_width > 0
+            ? document_.tile_width : 32);
+    draw_layer("base", view, 0.5f, tile_scale);
+    draw_layer("ground", view, 0.5f, tile_scale);
+    draw_layer("objects", view, 0.5f, tile_scale);
     if (document_.name == "home") {
         map::GridPosition mikhail;
         if (spawn_position(document_, translated_, "mikhail", 0, mikhail)) {
@@ -2803,11 +3023,12 @@ void MapRenderer::draw(int screen_width, int screen_height) const
     map::GridPosition player_screen;
     if (map::map_to_screen(view, player_, player_screen)) {
         C2D_DrawImageAt(player_image_, static_cast<float>(player_screen.x),
-            static_cast<float>(player_screen.y), 0.5f, NULL);
+            static_cast<float>(player_screen.y), 0.5f, NULL,
+            tile_scale, tile_scale);
     }
 
-    draw_layer("above", view, 0.5f);
-    draw_layer("top", view, 0.5f);
+    draw_layer("above", view, 0.5f, tile_scale);
+    draw_layer("top", view, 0.5f, tile_scale);
 }
 
 void MapRenderer::draw_player_portrait(float x, float y, float depth) const
@@ -2822,9 +3043,11 @@ map::GridPosition MapRenderer::player_position() const
     return player_;
 }
 
-map::ViewTransform MapRenderer::camera(int screen_width, int screen_height) const
+map::ViewTransform MapRenderer::camera(int screen_width, int screen_height,
+    float scaling_factor) const
 {
-    return map::camera_for_player(document_, player_, screen_width, screen_height);
+    return map::camera_for_player(document_, player_, screen_width,
+        screen_height, scaling_factor);
 }
 
 bool MapRenderer::player_walkable() const

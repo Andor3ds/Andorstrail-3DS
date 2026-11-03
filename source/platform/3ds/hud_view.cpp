@@ -49,9 +49,17 @@ const char *const UI_IMAGE_NAMES[] = {
     "equip_square.png"
 };
 
+const char *const TITLE_IMAGE_NAMES[] = {
+    "ts_background.png",
+    "ts_midground.png",
+    "ts_foreground.png",
+    "logo_anim_shine_00.png"
+};
+
 const u32 PANEL_BORDER = C2D_Color32(77, 102, 132, 255);
 const u32 PANEL_BACKGROUND = C2D_Color32(15, 32, 51, 255);
 const u32 PANEL_TEXT = C2D_Color32(224, 231, 238, 255);
+const int OVERVIEW_VISIBLE_ROWS = 5;
 
 Tex3DS_SubTexture crop_tile(const C2D_Image &image, unsigned int tile_index,
     unsigned int tile_count)
@@ -198,6 +206,65 @@ const char *bitmap_glyph(char character)
     }
 }
 
+int bitmap_glyph_width(char character)
+{
+    const char *glyph = bitmap_glyph(character);
+    int first_column = 5;
+    int last_column = -1;
+    for (int row = 0; row < 7; ++row) {
+        for (int column = 0; column < 5; ++column) {
+            if (glyph[row * 5 + column] == '1') {
+                first_column = std::min(first_column, column);
+                last_column = std::max(last_column, column);
+            }
+        }
+    }
+    return last_column >= first_column ? last_column - first_column + 1 : 2;
+}
+
+float bitmap_text_width(const char *text)
+{
+    float width = 0.0f;
+    for (const unsigned char *character =
+            reinterpret_cast<const unsigned char *>(text);
+            *character != '\0'; ++character) {
+        width += *character == ' ' ? 4.0f
+            : static_cast<float>(bitmap_glyph_width(
+                static_cast<char>(*character)) + 1);
+    }
+    return width;
+}
+
+void draw_bitmap_glyph(char character, float x, float y, float pixel_size,
+    u32 color)
+{
+    const char *glyph = bitmap_glyph(character);
+    int first_column = 5;
+    for (int row = 0; row < 7; ++row) {
+        for (int column = 0; column < 5; ++column) {
+            if (glyph[row * 5 + column] == '1') {
+                first_column = std::min(first_column, column);
+            }
+        }
+    }
+    if (first_column == 5) {
+        first_column = 0;
+    }
+    for (int row = 0; row < 7; ++row) {
+        int column = 0;
+        while (column < 5) {
+            while (column < 5 && glyph[row * 5 + column] != '1') ++column;
+            const int start = column;
+            while (column < 5 && glyph[row * 5 + column] == '1') ++column;
+            if (start < column) {
+                C2D_DrawRectSolid(x + (start - first_column) * pixel_size,
+                    y + row * pixel_size, 0.4f,
+                    (column - start) * pixel_size, pixel_size, color);
+            }
+        }
+    }
+}
+
 const char *equipment_slot_name(GameCoreEquipmentSlot slot)
 {
     switch (slot) {
@@ -219,13 +286,22 @@ const char *equipment_slot_name(GameCoreEquipmentSlot slot)
 HudView::HudView()
     : core_(NULL), renderer_(NULL), font_(NULL), text_buffer_(NULL),
       resources_(NULL), screen_(SCREEN_STATUS), hero_tab_(0), selected_level_up_(0),
-      inventory_scroll_(0), selected_inventory_index_(-1), inventory_category_(0),
-      inventory_sort_(0), selected_quick_slot_(0), selected_equipment_slot_(-1),
-      quest_scroll_(0), skill_scroll_(0), toolbox_open_(false),
+      overview_scroll_(0), overview_scroll_offset_(0), overview_max_scroll_(0),
+      inventory_scroll_(0),
+      selected_inventory_index_(-1),
+      inventory_category_(0), inventory_sort_(0), selected_quick_slot_(0),
+      selected_equipment_slot_(-1), quest_scroll_(0), skill_scroll_(0),
+      skill_scroll_offset_(0), skill_selection_(0), skill_touch_active_(false),
+      skill_touch_dragging_(false), skill_touch_start_y_(0),
+      skill_touch_last_y_(0), skill_touch_selection_(-1),
+      overview_touch_active_(false), overview_touch_dragging_(false),
+      overview_touch_start_y_(0), overview_touch_last_y_(0), toolbox_open_(false),
       quest_log_dirty_(true)
 {
     std::memset(sheets_, 0, sizeof(sheets_));
     std::memset(images_, 0, sizeof(images_));
+    std::memset(title_sheets_, 0, sizeof(title_sheets_));
+    std::memset(title_images_, 0, sizeof(title_images_));
     std::memset(&quickslot_closed_, 0, sizeof(quickslot_closed_));
     std::memset(&quickslot_open_, 0, sizeof(quickslot_open_));
     std::memset(&selection_yellow_, 0, sizeof(selection_yellow_));
@@ -275,7 +351,12 @@ void HudView::dispose()
         if (sheet != NULL) C2D_SpriteSheetFree(sheet);
         sheet = NULL;
     }
+    for (C2D_SpriteSheet &sheet : title_sheets_) {
+        if (sheet != NULL) C2D_SpriteSheetFree(sheet);
+        sheet = NULL;
+    }
     std::memset(images_, 0, sizeof(images_));
+    std::memset(title_images_, 0, sizeof(title_images_));
     core_ = NULL;
     renderer_ = NULL;
     font_ = NULL;
@@ -284,6 +365,9 @@ void HudView::dispose()
     screen_ = SCREEN_STATUS;
     hero_tab_ = 0;
     selected_level_up_ = 0;
+    overview_scroll_ = 0;
+    overview_scroll_offset_ = 0;
+    overview_max_scroll_ = 0;
     inventory_scroll_ = 0;
     selected_inventory_index_ = -1;
     selected_equipment_slot_ = -1;
@@ -293,6 +377,17 @@ void HudView::dispose()
     selected_equipment_slot_ = -1;
     quest_scroll_ = 0;
     skill_scroll_ = 0;
+    skill_scroll_offset_ = 0;
+    skill_selection_ = 0;
+    skill_touch_active_ = false;
+    skill_touch_dragging_ = false;
+    skill_touch_start_y_ = 0;
+    skill_touch_last_y_ = 0;
+    skill_touch_selection_ = -1;
+    overview_touch_active_ = false;
+    overview_touch_dragging_ = false;
+    overview_touch_start_y_ = 0;
+    overview_touch_last_y_ = 0;
     toolbox_open_ = false;
     quest_log_dirty_ = true;
     quest_snapshot_.clear();
@@ -339,6 +434,34 @@ bool HudView::load_images(std::string &error)
             || images_[ICON_SELECTIONS].subtex->height != 32) {
         error = "original Android UI icon atlas dimensions are invalid";
         return false;
+    }
+    for (unsigned int index = 0;
+            index < sizeof(TITLE_IMAGE_NAMES) / sizeof(TITLE_IMAGE_NAMES[0]);
+            ++index) {
+        char path[128];
+        std::string texture_name(TITLE_IMAGE_NAMES[index]);
+        texture_name.resize(texture_name.size() - 4);
+        const int length = std::snprintf(path, sizeof(path),
+            "romfs:/gfx/title/%s.t3x", texture_name.c_str());
+        if (length < 0 || static_cast<std::size_t>(length) >= sizeof(path)) {
+            error = "title texture path is too long";
+            return false;
+        }
+        title_sheets_[index] = C2D_SpriteSheetLoad(path);
+        if (title_sheets_[index] == NULL
+                || C2D_SpriteSheetCount(title_sheets_[index]) != 1) {
+            error = "original Android title texture could not be loaded: ";
+            error += path;
+            return false;
+        }
+        title_images_[index] = C2D_SpriteSheetGetImage(title_sheets_[index], 0);
+        if (title_images_[index].tex == NULL
+                || title_images_[index].subtex == NULL) {
+            error = "original Android title texture is empty: ";
+            error += path;
+            return false;
+        }
+        C3D_TexSetFilter(title_images_[index].tex, GPU_LINEAR, GPU_LINEAR);
     }
     return true;
 }
@@ -412,6 +535,34 @@ HudAction HudView::handle_touch(int x, int y)
     if (screen_ == SCREEN_HERO_INFO) {
         if (y < 48 && x >= 0 && x < 320) {
             hero_tab_ = std::min(3, x / 80);
+            skill_touch_active_ = false;
+            overview_touch_active_ = false;
+            return HUD_ACTION_NONE;
+        }
+        if (hero_tab_ == 2) {
+            std::size_t skill_count = 0;
+            skills::visible_definitions(skill_count);
+            if (y >= 77 && y < 201) {
+                const int selection = (skill_scroll_offset_ + y - 77) / 42;
+                skill_touch_active_ = true;
+                skill_touch_dragging_ = false;
+                skill_touch_start_y_ = y;
+                skill_touch_last_y_ = y;
+                skill_touch_selection_ = selection >= 0
+                        && static_cast<std::size_t>(selection) < skill_count
+                    ? selection : -1;
+                return HUD_ACTION_NONE;
+            }
+            skill_touch_active_ = false;
+            if (y >= 207 && y < 235 && x >= 180) {
+                return learn_selected_skill();
+            }
+        }
+        if (hero_tab_ == 0 && y >= 157 && y < 207) {
+            overview_touch_active_ = true;
+            overview_touch_dragging_ = false;
+            overview_touch_start_y_ = y;
+            overview_touch_last_y_ = y;
             return HUD_ACTION_NONE;
         }
         if (hero_tab_ == 3 && y >= 155 && y < 174) {
@@ -496,7 +647,7 @@ HudAction HudView::handle_touch(int x, int y)
             }
         }
         if (hero_tab_ == 0 && game_core_can_level_up(core_)
-                && y >= 184 && x >= 78 && x <= 242) {
+                && y >= 207 && y < 235 && x >= 210 && x < 312) {
             screen_ = SCREEN_LEVEL_UP;
         }
         return HUD_ACTION_NONE;
@@ -519,9 +670,133 @@ HudAction HudView::handle_touch(int x, int y)
     return HUD_ACTION_NONE;
 }
 
+void HudView::select_skill(int selection, std::size_t skill_count)
+{
+    if (skill_count == 0) {
+        skill_selection_ = 0;
+        skill_scroll_ = 0;
+        return;
+    }
+    const int last_selection = static_cast<int>(skill_count - 1);
+    skill_selection_ = std::max(0, std::min(selection, last_selection));
+    const int maximum_scroll = skill_count > 3
+        ? static_cast<int>(skill_count - 3) : 0;
+    if (skill_selection_ < skill_scroll_) {
+        skill_scroll_ = skill_selection_;
+    } else if (skill_selection_ >= skill_scroll_ + 3) {
+        skill_scroll_ = skill_selection_ - 2;
+    }
+    skill_scroll_ = std::max(0, std::min(skill_scroll_, maximum_scroll));
+    skill_scroll_offset_ = skill_scroll_ * 42;
+}
+
+HudAction HudView::learn_selected_skill()
+{
+    std::size_t skill_count = 0;
+    const skills::Definition *definitions =
+        skills::visible_definitions(skill_count);
+    if (skill_count == 0) return HUD_ACTION_NONE;
+    select_skill(skill_selection_, skill_count);
+    const skills::Definition &definition = definitions[skill_selection_];
+    if (core_->skill_points <= 0) {
+        notice_ = "You need a skill point to learn this.";
+        return HUD_ACTION_NONE;
+    }
+    const int skill_level = game_core_skill_level(core_, definition.id);
+    if (definition.maximum_level >= 0
+            && skill_level >= definition.maximum_level) {
+        notice_ = "This skill is already at maximum rank.";
+        return HUD_ACTION_NONE;
+    }
+    if (!skills::can_level_up(core_, definition)) {
+        notice_ = "Skill requirements are not met.";
+        return HUD_ACTION_NONE;
+    }
+    if (!skills::level_up(core_, definition)) {
+        notice_ = "Unable to learn this skill.";
+        return HUD_ACTION_NONE;
+    }
+    notice_.clear();
+    return HUD_ACTION_STATE_CHANGED;
+}
+
+void HudView::handle_touch_move(int x, int y)
+{
+    (void)x;
+    if (screen_ != SCREEN_HERO_INFO) return;
+    if (hero_tab_ == 2 && skill_touch_active_) {
+        if (!skill_touch_dragging_
+                && std::abs(y - skill_touch_start_y_) >= 8) {
+            skill_touch_dragging_ = true;
+            skill_touch_selection_ = -1;
+        }
+        if (skill_touch_dragging_) {
+            std::size_t skill_count = 0;
+            skills::visible_definitions(skill_count);
+            const int maximum_scroll = skill_count > 3
+                ? static_cast<int>(skill_count - 3) * 42 : 0;
+            skill_scroll_offset_ = std::max(0, std::min(maximum_scroll,
+                skill_scroll_offset_ + skill_touch_last_y_ - y));
+            skill_scroll_ = skill_scroll_offset_ / 42;
+            if (skill_count > 0) {
+                const int first_visible = skill_scroll_offset_ / 42;
+                const int last_visible = std::min(
+                    static_cast<int>(skill_count) - 1,
+                    (skill_scroll_offset_ + 123) / 42);
+                skill_selection_ = std::max(first_visible,
+                    std::min(last_visible, skill_selection_));
+            }
+            notice_.clear();
+        }
+        skill_touch_last_y_ = y;
+    } else if (hero_tab_ == 0 && overview_touch_active_) {
+        if (!overview_touch_dragging_
+                && std::abs(y - overview_touch_start_y_) >= 8) {
+            overview_touch_dragging_ = true;
+        }
+        if (overview_touch_dragging_) {
+            const int maximum_scroll = overview_max_scroll_ * 10;
+            overview_scroll_offset_ = std::max(0, std::min(maximum_scroll,
+                overview_scroll_offset_ + overview_touch_last_y_ - y));
+            overview_scroll_ = overview_scroll_offset_ / 10;
+        }
+        overview_touch_last_y_ = y;
+    }
+}
+
+void HudView::end_touch()
+{
+    if (skill_touch_active_ && !skill_touch_dragging_
+            && skill_touch_selection_ >= 0) {
+        std::size_t skill_count = 0;
+        skills::visible_definitions(skill_count);
+        if (static_cast<std::size_t>(skill_touch_selection_) < skill_count) {
+            select_skill(skill_touch_selection_, skill_count);
+            notice_.clear();
+        }
+    }
+    skill_touch_active_ = false;
+    skill_touch_dragging_ = false;
+    skill_touch_selection_ = -1;
+    overview_touch_active_ = false;
+    overview_touch_dragging_ = false;
+}
+
 bool HudView::handle_keys(u32 keys_down, HudAction &action)
 {
-    if (screen_ == SCREEN_STATUS) return false;
+    if (screen_ == SCREEN_STATUS) {
+        if (keys_down & KEY_X) {
+            screen_ = SCREEN_HERO_INFO;
+            hero_tab_ = 0;
+            toolbox_open_ = false;
+            return true;
+        }
+        if (keys_down & KEY_Y) {
+            action = HUD_ACTION_SWAP_SCREENS;
+            return true;
+        }
+        return false;
+    }
 
     if (keys_down & KEY_B) {
         screen_ = screen_ == SCREEN_LEVEL_UP ? SCREEN_HERO_INFO : SCREEN_STATUS;
@@ -615,9 +890,24 @@ bool HudView::handle_keys(u32 keys_down, HudAction &action)
         return true;
     }
     if (screen_ == SCREEN_HERO_INFO) {
-        if (keys_down & KEY_LEFT) hero_tab_ = (hero_tab_ + 3) % 4;
-        if (keys_down & KEY_RIGHT) hero_tab_ = (hero_tab_ + 1) % 4;
-        if (hero_tab_ == 3) {
+        if (hero_tab_ == 0 && (keys_down & KEY_X)) {
+            screen_ = SCREEN_STATUS;
+            toolbox_open_ = false;
+            return true;
+        }
+        if (keys_down & KEY_L) hero_tab_ = (hero_tab_ + 3) % 4;
+        if (keys_down & KEY_R) hero_tab_ = (hero_tab_ + 1) % 4;
+        if (hero_tab_ == 0) {
+            if (keys_down & KEY_UP) {
+                overview_scroll_ = std::max(0, overview_scroll_ - 1);
+                overview_scroll_offset_ = overview_scroll_ * 10;
+            }
+            if (keys_down & KEY_DOWN) {
+                overview_scroll_ = std::min(overview_max_scroll_,
+                    overview_scroll_ + 1);
+                overview_scroll_offset_ = overview_scroll_ * 10;
+            }
+        } else if (hero_tab_ == 3) {
             if (keys_down & KEY_Y) {
                 inventory_category_ = (inventory_category_ + 7) % 8;
                 inventory_scroll_ = 0;
@@ -626,18 +916,6 @@ bool HudView::handle_keys(u32 keys_down, HudAction &action)
             }
             if (keys_down & KEY_X) {
                 inventory_category_ = (inventory_category_ + 1) % 8;
-                inventory_scroll_ = 0;
-                selected_inventory_index_ = -1;
-                selected_equipment_slot_ = -1;
-            }
-            if (keys_down & KEY_L) {
-                inventory_sort_ = (inventory_sort_ + 5) % 6;
-                inventory_scroll_ = 0;
-                selected_inventory_index_ = -1;
-                selected_equipment_slot_ = -1;
-            }
-            if (keys_down & KEY_R) {
-                inventory_sort_ = (inventory_sort_ + 1) % 6;
                 inventory_scroll_ = 0;
                 selected_inventory_index_ = -1;
                 selected_equipment_slot_ = -1;
@@ -741,23 +1019,16 @@ bool HudView::handle_keys(u32 keys_down, HudAction &action)
             }
         } else if (hero_tab_ == 2) {
             std::size_t skill_count = 0;
-            const skills::Definition *definitions =
-                skills::visible_definitions(skill_count);
-            const int maximum_scroll = skill_count > 3
-                ? static_cast<int>(skill_count - 3) : 0;
-            if (keys_down & KEY_UP) skill_scroll_ = std::max(0, skill_scroll_ - 1);
+            skills::visible_definitions(skill_count);
+            if (keys_down & KEY_UP) {
+                select_skill(skill_selection_ - 1, skill_count);
+                notice_.clear();
+            }
             if (keys_down & KEY_DOWN) {
-                skill_scroll_ = std::min(maximum_scroll, skill_scroll_ + 1);
+                select_skill(skill_selection_ + 1, skill_count);
+                notice_.clear();
             }
-            if (keys_down & KEY_A) {
-                const skills::Definition &definition = definitions[skill_scroll_];
-                if (skills::level_up(core_, definition)) {
-                    notice_.clear();
-                    action = HUD_ACTION_STATE_CHANGED;
-                } else {
-                    notice_ = "Skill requirements are not met.";
-                }
-            }
+            if (keys_down & KEY_A) action = learn_selected_skill();
         }
         if (hero_tab_ == 0 && (keys_down & KEY_A) && game_core_can_level_up(core_)) {
             screen_ = SCREEN_LEVEL_UP;
@@ -790,11 +1061,11 @@ void HudView::set_notice(const std::string &message)
     notice_ = message;
 }
 
-void HudView::draw() const
+void HudView::draw(int screen_offset_x) const
 {
     if (core_ == NULL || renderer_ == NULL) return;
     if (screen_ == SCREEN_STATUS) draw_status();
-    else if (screen_ == SCREEN_HERO_INFO) draw_hero_info();
+    else if (screen_ == SCREEN_HERO_INFO) draw_hero_info(screen_offset_x);
     else if (screen_ == SCREEN_LEVEL_UP) draw_level_up();
     else if (screen_ == SCREEN_COMBAT_LOG) {
         draw_panel(4.0f, 4.0f, 312.0f, 232.0f);
@@ -811,11 +1082,96 @@ void HudView::draw() const
     } else draw_quick_items();
 }
 
+void HudView::draw_start_title() const
+{
+    for (int band = 0; band < 24; ++band) {
+        const unsigned char shade = static_cast<unsigned char>(153 - band * 3);
+        C2D_DrawRectSolid(0.0f, static_cast<float>(band * 10), 0.0f,
+            400.0f, 10.0f, C2D_Color32(shade, shade, shade, 255));
+    }
+    const float landscape_scale = 400.0f / title_images_[0].subtex->width;
+    for (unsigned int index = 0; index < 3; ++index) {
+        C2D_DrawImageAt(title_images_[index], 0.0f, 39.0f, 0.2f, NULL,
+            landscape_scale, landscape_scale);
+    }
+    C2D_DrawImageAt(title_images_[3], 40.0f, 27.0f, 0.1f, NULL,
+        0.409f, 0.409f);
+}
+
+void HudView::draw_start_screen(StartMenuPage page, int selected,
+    const std::vector<std::string> &entries, const std::string &message) const
+{
+    draw_panel(4.0f, 4.0f, 312.0f, 232.0f);
+    const char *title = "Andor's Trail";
+    if (page == START_MENU_LOAD) title = "Load saved game";
+    else if (page == START_MENU_SAVE) title = "Save game";
+    else if (page == START_MENU_CONFIRM_NEW_GAME) title = "New game";
+    else if (page == START_MENU_CONFIRM_OVERWRITE) title = "Overwrite Savegame?";
+    else if (page == START_MENU_PREFERENCES) title = "Preferences";
+    else if (page == START_MENU_ABOUT) title = "About / Help";
+    draw_text(title, 12.0f, 11.0f, 0.43f, PANEL_TEXT);
+
+    if (!message.empty()) {
+        draw_text(message.c_str(), 12.0f, 38.0f, 0.29f, PANEL_TEXT, true, 292.0f);
+    }
+    if (page == START_MENU_MAIN && entries.size() >= 4
+            && entries.size() <= 5) {
+        const bool has_continue = entries.size() == 5;
+        const int offset = has_continue ? 1 : 0;
+        const float row_y = has_continue ? 101.0f : 88.0f;
+        if (has_continue) {
+            if (selected == 0) draw_panel(8.0f, 60.0f, 304.0f, 29.0f);
+            draw_text(entries[0].c_str(), 16.0f, 66.0f, 0.32f, PANEL_TEXT);
+        }
+        for (int row = 0; row < 2; ++row) {
+            const float y = row_y + row * 43.0f;
+            for (int column = 0; column < 2; ++column) {
+                const int index = offset + row * 2 + column;
+                if (index >= static_cast<int>(entries.size())) continue;
+                const float x = column == 0 ? 8.0f : 163.0f;
+                if (selected == index) {
+                    draw_panel(x, y, 149.0f, 36.0f);
+                }
+                draw_text(entries[static_cast<std::size_t>(index)].c_str(),
+                    x + 7.0f, y + 7.0f, 0.30f, PANEL_TEXT, true, 137.0f);
+            }
+        }
+        draw_text("A: select   B: back", 12.0f, 220.0f, 0.27f, PANEL_TEXT);
+        return;
+    }
+    const float first_y = page == START_MENU_MAIN ? 53.0f : 98.0f;
+    const float available_height = page == START_MENU_MAIN ? 166.0f : 115.0f;
+    const float row_height = entries.empty() ? available_height
+        : std::min(available_height, available_height / entries.size());
+    for (std::size_t index = 0; index < entries.size(); ++index) {
+        const float y = first_y + static_cast<float>(index) * row_height;
+        if (static_cast<int>(index) == selected) {
+            draw_panel(8.0f, y - 2.0f, 304.0f, row_height - 1.0f);
+        }
+        draw_text(entries[index].c_str(), 16.0f, y + 3.0f, 0.32f, PANEL_TEXT,
+            true, 286.0f);
+    }
+    draw_text("A: select   B: back", 12.0f, 220.0f, 0.27f, PANEL_TEXT);
+}
+
 void HudView::draw_interaction(const char *text) const
 {
     if (text == NULL || text[0] == '\0') return;
     draw_nine_patch(ICON_STD_FRAME, 8.0f, 92.0f, 384.0f, 140.0f);
     draw_text(text, 18.0f, 103.0f, 0.42f, PANEL_TEXT, true, 364.0f);
+}
+
+void HudView::draw_encounter_options(int selected) const
+{
+    const int positions[] = {24, 136, 250};
+    const char *options[] = {"Yes", "Info", "No"};
+    for (int option = 0; option < 3; ++option) {
+        const std::string label = (option == selected ? "> " : "  ")
+            + std::string(options[option]);
+        draw_text(label.c_str(), positions[option], 181.0f, 0.34f, PANEL_TEXT);
+    }
+    draw_text("Left/Right: select  A: choose  B: No",
+        18.0f, 208.0f, 0.25f, PANEL_TEXT);
 }
 
 void HudView::draw_combat_overlay() const
@@ -906,7 +1262,7 @@ void HudView::draw_status() const
         C2D_Color32(255, 210, 120, 255));
 }
 
-void HudView::draw_hero_info() const
+void HudView::draw_hero_info(int screen_offset_x) const
 {
     combat::PlayerCombatStats player_stats;
     std::string stats_error;
@@ -930,43 +1286,197 @@ void HudView::draw_hero_info() const
 
     if (hero_tab_ == 0) {
         draw_panel(3.0f, 47.0f, 314.0f, 190.0f);
-        C2D_DrawImageAt(images_[ICON_HERO_LARGE], 9.0f, 52.0f, 0.3f,
-            NULL, 1.0f, 1.0f);
+        C2D_DrawImageAt(images_[ICON_HERO_LARGE], 9.0f, 51.0f, 0.3f,
+            NULL, 0.40f, 0.40f);
         char line[96];
-        std::snprintf(line, sizeof(line), "Mode: Standard    Level: %d", core_->level);
-        draw_text(line, 48.0f, 52.0f, 0.29f, PANEL_TEXT);
-        std::snprintf(line, sizeof(line), "Total experience: %d", core_->total_experience);
-        draw_text(line, 48.0f, 67.0f, 0.29f, PANEL_TEXT);
-        std::snprintf(line, sizeof(line), "Health points (HP): %d/%d",
-            core_->health, stats_valid ? player_stats.maximum_health : core_->max_health);
-        draw_text(line, 9.0f, 91.0f, 0.29f, PANEL_TEXT);
-        draw_bar(134.0f, 91.0f, 172.0f, core_->health,
+        draw_text("Abyss", 39.0f, 58.0f, 0.28f, PANEL_TEXT);
+        draw_text("Mode", 9.0f, 80.0f, 0.23f, PANEL_TEXT);
+        draw_text("Standard", 104.0f, 80.0f, 0.23f, PANEL_TEXT);
+        draw_text("Level", 9.0f, 91.0f, 0.23f, PANEL_TEXT);
+        std::snprintf(line, sizeof(line), "%d", core_->level);
+        draw_text(line, 104.0f, 91.0f, 0.23f, PANEL_TEXT);
+        draw_text("Total experience", 9.0f, 102.0f, 0.23f, PANEL_TEXT);
+        std::snprintf(line, sizeof(line), "%d", core_->total_experience);
+        draw_text(line, 104.0f, 102.0f, 0.23f, PANEL_TEXT);
+        const int maximum_action_points = stats_valid
+            ? player_stats.maximum_action_points
+            : renderer_->maximum_player_action_points();
+        const int current_action_points = renderer_->is_in_combat()
+            ? renderer_->displayed_player_action_points()
+            : maximum_action_points;
+        const int maximum_health = stats_valid
+            ? player_stats.maximum_health : core_->max_health;
+        std::snprintf(line, sizeof(line), "%d/%d", core_->health, maximum_health);
+        const float bar_x = 140.0f;
+        const float bar_width = 168.0f;
+        draw_text("Health points (HP):", 9.0f, 114.0f, 0.23f, PANEL_TEXT);
+        draw_bar(bar_x, 111.0f, bar_width, core_->health,
             stats_valid ? player_stats.maximum_health : core_->max_health,
             ICON_RED_FOREGROUND);
+        draw_text(line, bar_x + (bar_width - bitmap_text_width(line)) / 2.0f,
+            113.0f, 0.23f, PANEL_TEXT);
         const int next_level = game_core_experience_for_next_level(core_->level);
         const int current_xp = game_core_experience_in_current_level(core_);
-        std::snprintf(line, sizeof(line), "Experience points (XP): %d/%d",
-            current_xp, next_level);
-        draw_text(line, 9.0f, 108.0f, 0.29f, PANEL_TEXT);
-        draw_bar(134.0f, 108.0f, 172.0f, current_xp, next_level,
+        std::snprintf(line, sizeof(line), "%d/%d", current_xp, next_level);
+        draw_text("Experience points (XP):", 9.0f, 127.0f, 0.23f, PANEL_TEXT);
+        draw_bar(bar_x, 124.0f, bar_width, current_xp, next_level,
             ICON_YELLOW_FOREGROUND);
-        C2D_DrawRectSolid(5.0f, 127.0f, 0.4f, 310.0f, 1.0f, PANEL_BORDER);
-        draw_text("Combat statistics (current)", 9.0f, 132.0f, 0.3f, PANEL_TEXT);
-        std::snprintf(line, sizeof(line), "Attack chance: %d%%",
+        draw_text(line, bar_x + (bar_width - bitmap_text_width(line)) / 2.0f,
+            126.0f, 0.23f, PANEL_TEXT);
+        std::snprintf(line, sizeof(line), "%d/%d",
+            current_action_points, maximum_action_points);
+        draw_text("Action points (AP):", 9.0f, 140.0f, 0.23f, PANEL_TEXT);
+        draw_bar(bar_x, 137.0f, bar_width,
+            current_action_points, maximum_action_points,
+            ICON_COMBAT_BLUE_FOREGROUND);
+        draw_text(line, bar_x + (bar_width - bitmap_text_width(line)) / 2.0f,
+            139.0f, 0.23f, PANEL_TEXT);
+        C2D_DrawRectSolid(5.0f, 152.0f, 0.4f, 310.0f, 1.0f, PANEL_BORDER);
+
+        struct OverviewRow {
+            std::string label;
+            std::string value;
+            u32 color;
+            bool section;
+        };
+        std::vector<OverviewRow> overview_rows;
+        const u32 section_color = C2D_Color32(255, 210, 120, 255);
+        char stat_line[96];
+        const auto add_section = [&overview_rows, section_color](
+                const char *label) {
+            OverviewRow row = {label, "", section_color, true};
+            overview_rows.push_back(row);
+        };
+        const auto add_value = [&overview_rows](
+                const char *label, const char *value) {
+            OverviewRow row = {label, value, PANEL_TEXT, false};
+            overview_rows.push_back(row);
+        };
+
+        add_section("Combat statistics (current)");
+        std::snprintf(stat_line, sizeof(stat_line), "%d AP",
+            stats_valid ? player_stats.reequip_cost : 5);
+        add_value("Re-equip cost:", stat_line);
+        std::snprintf(stat_line, sizeof(stat_line), "%d AP",
+            stats_valid ? player_stats.use_item_cost : 5);
+        add_value("Use item cost:", stat_line);
+        std::snprintf(stat_line, sizeof(stat_line), "%d AP",
+            stats_valid ? player_stats.move_cost : 6);
+        add_value("Move cost:", stat_line);
+        std::snprintf(stat_line, sizeof(stat_line), "%d AP",
+            stats_valid ? player_stats.attack_cost : 4);
+        add_value("Attack cost:", stat_line);
+        std::snprintf(stat_line, sizeof(stat_line), "%d%%",
             stats_valid ? player_stats.attack_chance : core_->attack_chance);
-        draw_text(line, 9.0f, 151.0f, 0.29f, PANEL_TEXT);
-        std::snprintf(line, sizeof(line), "Attack damage: %d-%d HP",
-            stats_valid ? player_stats.minimum_damage : core_->attack_damage,
-            stats_valid ? player_stats.maximum_damage : core_->attack_damage);
-        draw_text(line, 164.0f, 151.0f, 0.29f, PANEL_TEXT);
-        std::snprintf(line, sizeof(line), "Block chance: %d%%",
-            stats_valid ? player_stats.block_chance : core_->block_chance);
-        draw_text(line, 9.0f, 169.0f, 0.29f, PANEL_TEXT);
-        std::snprintf(line, sizeof(line), "Skill points: %d", core_->skill_points);
-        draw_text(line, 164.0f, 169.0f, 0.29f, PANEL_TEXT);
+        add_value("Attack chance:", stat_line);
+        const int minimum_damage = stats_valid
+            ? player_stats.minimum_damage : core_->attack_damage;
+        const int maximum_damage = stats_valid
+            ? player_stats.maximum_damage : core_->attack_damage;
+        if (minimum_damage == maximum_damage) {
+            std::snprintf(stat_line, sizeof(stat_line), "%d HP", maximum_damage);
+        } else {
+            std::snprintf(stat_line, sizeof(stat_line), "%d-%d HP",
+                minimum_damage, maximum_damage);
+        }
+        add_value("Attack damage:", stat_line);
+        const int critical_skill = stats_valid
+            ? player_stats.critical_skill : core_->critical_skill;
+        const double critical_multiplier = stats_valid
+            ? player_stats.critical_multiplier : core_->critical_multiplier;
+        if (critical_skill != 0) {
+            std::snprintf(stat_line, sizeof(stat_line), "%d", critical_skill);
+            add_value("Critical hit skill:", stat_line);
+        }
+        if (critical_multiplier != 0.0 && critical_multiplier != 1.0) {
+            std::snprintf(stat_line, sizeof(stat_line), "%.2fx",
+                critical_multiplier);
+            add_value("Critical multiplier:", stat_line);
+        }
+        const int block_chance = stats_valid
+            ? player_stats.block_chance : core_->block_chance;
+        if (block_chance != 0) {
+            std::snprintf(stat_line, sizeof(stat_line), "%d%%", block_chance);
+            add_value("Block chance:", stat_line);
+        }
+        if (stats_valid && player_stats.damage_resistance != 0) {
+            std::snprintf(stat_line, sizeof(stat_line), "%d HP",
+                player_stats.damage_resistance);
+            add_value("Damage resistance:", stat_line);
+        }
+
+        add_section("Base combat statistics (without equipment and skills)");
+        std::snprintf(stat_line, sizeof(stat_line), "%d HP", core_->max_health);
+        add_value("Max HP:", stat_line);
+        add_value("Max AP:", "10 AP");
+        add_value("Re-equip cost:", "5 AP");
+        add_value("Use item cost:", "5 AP");
+        add_value("Move cost:", "6 AP");
+        add_value("Attack cost:", "4 AP");
+        std::snprintf(stat_line, sizeof(stat_line), "%d%%", core_->attack_chance);
+        add_value("Attack chance:", stat_line);
+        std::snprintf(stat_line, sizeof(stat_line), "%d HP", core_->attack_damage);
+        add_value("Attack damage:", stat_line);
+        if (core_->critical_skill != 0) {
+            std::snprintf(stat_line, sizeof(stat_line), "%d", core_->critical_skill);
+            add_value("Critical hit skill:", stat_line);
+        }
+        if (core_->critical_multiplier != 0.0f
+                && core_->critical_multiplier != 1.0f) {
+            std::snprintf(stat_line, sizeof(stat_line), "%.2fx",
+                core_->critical_multiplier);
+            add_value("Critical multiplier:", stat_line);
+        }
+        if (core_->block_chance != 0) {
+            std::snprintf(stat_line, sizeof(stat_line), "%d%%", core_->block_chance);
+            add_value("Block chance:", stat_line);
+        }
+
+        add_section("Game statistics");
+        std::size_t visited_maps = 0;
+        for (std::size_t index = 0; index < core_->map_state_count; ++index) {
+            if (core_->map_states[index].visited) ++visited_maps;
+        }
+        std::snprintf(stat_line, sizeof(stat_line), "%lu",
+            static_cast<unsigned long>(visited_maps));
+        add_value("Maps visited:", stat_line);
+
+        const std::size_t visible_rows = OVERVIEW_VISIBLE_ROWS;
+        const std::size_t maximum_scroll = overview_rows.size() > visible_rows
+            ? overview_rows.size() - visible_rows : 0;
+        overview_max_scroll_ = static_cast<int>(maximum_scroll);
+        const int maximum_scroll_offset = overview_max_scroll_ * 10;
+        overview_scroll_offset_ = std::max(0, std::min(
+            maximum_scroll_offset, overview_scroll_offset_));
+        overview_scroll_ = overview_scroll_offset_ / 10;
+        const std::size_t first_row = static_cast<std::size_t>(
+            overview_scroll_offset_ / 10);
+        const int partial_row_offset = overview_scroll_offset_ % 10;
+        const std::size_t last_row = std::min(overview_rows.size(),
+            first_row + visible_rows + 1);
+        C3D_SetScissor(GPU_SCISSOR_NORMAL,
+            static_cast<u32>(screen_offset_x + 5), 157,
+            static_cast<u32>(screen_offset_x + 315), 207);
+        for (std::size_t index = first_row; index < last_row; ++index) {
+            const float row_y = 157.0f
+                + static_cast<float>(index - first_row) * 10.0f
+                - static_cast<float>(partial_row_offset);
+            draw_text(overview_rows[index].label.c_str(), 9.0f, row_y,
+                0.23f, overview_rows[index].color);
+            if (overview_rows[index].section) {
+                C2D_DrawRectSolid(5.0f, row_y + 8.0f, 0.4f,
+                    310.0f, 1.0f, PANEL_BORDER);
+            } else {
+                draw_text(overview_rows[index].value.c_str(), 168.0f, row_y,
+                    0.23f, overview_rows[index].color);
+            }
+        }
+        C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+        draw_text("Up/Down: stats", 9.0f, 216.0f, 0.23f,
+            C2D_Color32(174, 190, 207, 255));
         if (game_core_can_level_up(core_)) {
-            draw_panel(79.0f, 192.0f, 162.0f, 30.0f);
-            draw_text("Level up", 132.0f, 201.0f, 0.29f, PANEL_TEXT);
+            draw_panel(210.0f, 207.0f, 102.0f, 25.0f);
+            draw_text("Level up", 230.0f, 214.0f, 0.26f, PANEL_TEXT);
         }
         if (!stats_valid) {
             draw_text(stats_error.c_str(), 9.0f, 183.0f, 0.24f,
@@ -1013,16 +1523,28 @@ void HudView::draw_hero_info() const
                 static_cast<unsigned long>(skill_count));
             draw_text(line, 252.0f, 53.0f, 0.25f, PANEL_TEXT);
         }
-        const std::size_t start = static_cast<std::size_t>(skill_scroll_);
-        const std::size_t end = std::min(skill_count, start + 3);
+        const int maximum_scroll_offset = skill_count > 3
+            ? static_cast<int>(skill_count - 3) * 42 : 0;
+        skill_scroll_offset_ = std::max(0, std::min(
+            maximum_scroll_offset, skill_scroll_offset_));
+        skill_scroll_ = skill_scroll_offset_ / 42;
+        const std::size_t start = static_cast<std::size_t>(
+            skill_scroll_offset_ / 42);
+        const int partial_row_offset = skill_scroll_offset_ % 42;
+        const std::size_t end = std::min(skill_count, start + 4);
+        C3D_SetScissor(GPU_SCISSOR_NORMAL,
+            static_cast<u32>(screen_offset_x + 5), 77,
+            static_cast<u32>(screen_offset_x + 315), 201);
         for (std::size_t index = start; index < end; ++index) {
-            const float y = 78.0f + static_cast<float>(index - start) * 47.0f;
+            const float y = 77.0f
+                + static_cast<float>(index - start) * 42.0f
+                - static_cast<float>(partial_row_offset);
             const int skill_level = game_core_skill_level(core_, definitions[index].id);
             const bool can_learn = skills::can_level_up(core_, definitions[index]);
             const bool at_maximum = definitions[index].maximum_level >= 0
                 && skill_level >= definitions[index].maximum_level;
-            if (index == start) {
-                draw_panel(5.0f, y - 2.0f, 310.0f, 43.0f);
+            if (index == static_cast<std::size_t>(skill_selection_)) {
+                draw_panel(5.0f, y - 2.0f, 310.0f, 40.0f);
             }
             C2D_DrawImageAt(images_[ICON_SKILL], 9.0f, y + 3.0f, 0.3f,
                 NULL, 0.42f, 0.42f);
@@ -1030,31 +1552,35 @@ void HudView::draw_hero_info() const
             if (skill_level > 0) {
                 std::snprintf(skill_name, sizeof(skill_name), "%s (%d)%s",
                     definitions[index].name, skill_level,
-                    index == start ? (can_learn ? " [ready]"
+                    index == static_cast<std::size_t>(skill_selection_)
+                        ? (can_learn ? " [ready]"
                         : (at_maximum ? " [max]" : " [locked]")) : "");
             } else {
                 std::snprintf(skill_name, sizeof(skill_name), "%s%s",
                     definitions[index].name,
-                    index == start ? (can_learn ? " [ready]"
+                    index == static_cast<std::size_t>(skill_selection_)
+                        ? (can_learn ? " [ready]"
                         : (at_maximum ? " [max]" : " [locked]")) : "");
             }
             draw_text(skill_name, 31.0f, y, 0.28f, PANEL_TEXT);
-            draw_text(definitions[index].description, 31.0f, y + 17.0f,
+            draw_text(definitions[index].description, 31.0f, y + 16.0f,
                 0.24f, PANEL_TEXT, true, 276.0f);
             if (index + 1 < end) {
-                C2D_DrawRectSolid(9.0f, y + 43.0f, 0.4f, 302.0f, 1.0f,
+                C2D_DrawRectSolid(9.0f, y + 40.0f, 0.4f, 302.0f, 1.0f,
                     PANEL_BORDER);
             }
         }
-        if (skill_count > 3) {
-            draw_text("Up/Down: browse  A: learn selected", 9.0f, 220.0f,
-                0.24f, PANEL_TEXT);
-        } else if (skill_count != 0) {
-            draw_text("A: learn selected", 9.0f, 220.0f, 0.24f, PANEL_TEXT);
-        }
+        C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+        draw_panel(181.0f, 207.0f, 131.0f, 25.0f);
+        draw_text("Learn", 226.0f, 214.0f, 0.26f, PANEL_TEXT);
         if (!notice_.empty()) {
-            draw_text(notice_.c_str(), 9.0f, 220.0f, 0.23f,
-                C2D_Color32(255, 210, 120, 255), true, 300.0f);
+            draw_text(notice_.c_str(), 9.0f, 211.0f, 0.23f,
+                C2D_Color32(255, 210, 120, 255), true, 165.0f);
+        } else {
+            draw_text("Tap skill; swipe to browse", 9.0f, 216.0f, 0.23f,
+                C2D_Color32(174, 190, 207, 255));
+            draw_text("A learns", 9.0f, 225.0f, 0.23f,
+                C2D_Color32(174, 190, 207, 255));
         }
     } else {
         draw_panel(3.0f, 47.0f, 314.0f, 95.0f);
@@ -1596,7 +2122,7 @@ void HudView::draw_text(const char *text, float x, float y, float scale,
 {
     if (text == NULL) return;
     if (text_buffer_ == NULL) return;
-    bool bitmap_compatible = !wrap;
+    bool bitmap_compatible = true;
     for (const unsigned char *character =
             reinterpret_cast<const unsigned char *>(text);
             *character != '\0'; ++character) {
@@ -1619,50 +2145,48 @@ void HudView::draw_text(const char *text, float x, float y, float scale,
     float cursor_x = std::floor(x + 0.5f);
     const float start_x = cursor_x;
     float cursor_y = std::floor(y + 0.5f);
-    for (const unsigned char *character =
-            reinterpret_cast<const unsigned char *>(text);
-            *character != '\0'; ++character) {
+    const float line_right = start_x + wrap_width;
+    const unsigned char *character =
+        reinterpret_cast<const unsigned char *>(text);
+    while (*character != '\0') {
         if (*character == '\n') {
             cursor_x = start_x;
             cursor_y += pixel_size * 8.0f;
+            ++character;
             continue;
         }
         if (*character == ' ') {
             cursor_x += pixel_size * 4.0f;
+            ++character;
             continue;
         }
-        const char *glyph = bitmap_glyph(static_cast<char>(*character));
-        int first_column = 5;
-        int last_column = -1;
-        for (int row = 0; row < 7; ++row) {
-            if (*character >= 'a' && *character <= 'z' && row == 0) continue;
-            for (int column = 0; column < 5; ++column) {
-                if (glyph[row * 5 + column] == '1') {
-                    first_column = std::min(first_column, column);
-                    last_column = std::max(last_column, column);
-                }
+        const unsigned char *word_end = character;
+        float word_width = 0.0f;
+        while (*word_end != '\0' && *word_end != ' ' && *word_end != '\n') {
+            word_width += (bitmap_glyph_width(static_cast<char>(*word_end)) + 1)
+                * pixel_size;
+            ++word_end;
+        }
+        if (word_end != character) {
+            word_width -= pixel_size;
+        }
+        if (wrap && cursor_x > start_x && cursor_x + word_width > line_right) {
+            cursor_x = start_x;
+            cursor_y += pixel_size * 8.0f;
+        }
+        while (character != word_end) {
+            const char glyph_character = static_cast<char>(*character);
+            const float advance = (bitmap_glyph_width(glyph_character) + 1)
+                * pixel_size;
+            if (wrap && cursor_x > start_x && cursor_x + advance > line_right) {
+                cursor_x = start_x;
+                cursor_y += pixel_size * 8.0f;
             }
+            draw_bitmap_glyph(glyph_character, cursor_x, cursor_y,
+                pixel_size, color);
+            cursor_x += advance;
+            ++character;
         }
-        if (last_column < first_column) {
-            first_column = 0;
-            last_column = 1;
-        }
-        for (int row = 0; row < 7; ++row) {
-            int column = 0;
-            while (column < 5) {
-                while (column < 5 && glyph[row * 5 + column] != '1') ++column;
-                const int start = column;
-                while (column < 5 && glyph[row * 5 + column] == '1') ++column;
-                if (start < column) {
-                    C2D_DrawRectSolid(
-                        cursor_x + (start - first_column) * pixel_size,
-                        cursor_y + row * pixel_size, 0.4f,
-                        (column - start) * pixel_size, pixel_size, color);
-                }
-            }
-        }
-        const int glyph_width = last_column - first_column + 1;
-        cursor_x += (glyph_width + 1) * pixel_size;
     }
 }
 

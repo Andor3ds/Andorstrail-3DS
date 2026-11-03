@@ -702,13 +702,37 @@ bool game_core_save(const GameCore *core, const char *path)
     const size_t path_length = strlen(path);
     if (path_length > SIZE_MAX - sizeof(".tmp")) return false;
     char *temporary_path = malloc(path_length + sizeof(".tmp"));
-    if (temporary_path == NULL) return false;
+    char *backup_path = malloc(path_length + sizeof(".bak"));
+    if (temporary_path == NULL || backup_path == NULL) {
+        free(temporary_path);
+        free(backup_path);
+        return false;
+    }
     memcpy(temporary_path, path, path_length);
     memcpy(temporary_path + path_length, ".tmp", sizeof(".tmp"));
+    memcpy(backup_path, path, path_length);
+    memcpy(backup_path + path_length, ".bak", sizeof(".bak"));
+
+    FILE *existing = fopen(path, "rb");
+    const bool target_exists = existing != NULL;
+    if (existing != NULL) fclose(existing);
+    if (!target_exists) {
+        existing = fopen(backup_path, "rb");
+        const bool backup_exists = existing != NULL;
+        if (existing != NULL) fclose(existing);
+        if (backup_exists && rename(backup_path, path) != 0) {
+            free(temporary_path);
+            free(backup_path);
+            return false;
+        }
+    } else {
+        remove(backup_path);
+    }
 
     FILE *file = fopen(temporary_path, "wb");
     if (file == NULL) {
         free(temporary_path);
+        free(backup_path);
         return false;
     }
     bool valid = fprintf(file,
@@ -790,9 +814,22 @@ bool game_core_save(const GameCore *core, const char *path)
                 core->skills[index].value) >= 0;
     }
     if (fclose(file) != 0) valid = false;
-    if (valid && rename(temporary_path, path) != 0) valid = false;
+    if (valid) {
+        existing = fopen(path, "rb");
+        const bool has_existing_target = existing != NULL;
+        if (existing != NULL) fclose(existing);
+        if (has_existing_target && rename(path, backup_path) != 0) {
+            valid = false;
+        } else if (rename(temporary_path, path) != 0) {
+            valid = false;
+            if (has_existing_target) rename(backup_path, path);
+        } else if (has_existing_target) {
+            remove(backup_path);
+        }
+    }
     if (!valid) remove(temporary_path);
     free(temporary_path);
+    free(backup_path);
     return valid;
 }
 
@@ -800,7 +837,19 @@ GameCoreLoadResult game_core_load(GameCore *core, const char *path)
 {
     if (core == NULL || path == NULL || path[0] == '\0') return GAME_CORE_LOAD_ERROR;
     FILE *file = fopen(path, "rb");
-    if (file == NULL) return errno == ENOENT ? GAME_CORE_LOAD_NOT_FOUND : GAME_CORE_LOAD_ERROR;
+    if (file == NULL) {
+        if (errno != ENOENT) return GAME_CORE_LOAD_ERROR;
+        const size_t path_length = strlen(path);
+        if (path_length > SIZE_MAX - sizeof(".bak")) return GAME_CORE_LOAD_ERROR;
+        char *backup_path = malloc(path_length + sizeof(".bak"));
+        if (backup_path == NULL) return GAME_CORE_LOAD_ERROR;
+        memcpy(backup_path, path, path_length);
+        memcpy(backup_path + path_length, ".bak", sizeof(".bak"));
+        file = fopen(backup_path, "rb");
+        free(backup_path);
+        if (file == NULL) return errno == ENOENT
+            ? GAME_CORE_LOAD_NOT_FOUND : GAME_CORE_LOAD_ERROR;
+    }
 
     static GameCore loaded;
     game_core_init(&loaded);

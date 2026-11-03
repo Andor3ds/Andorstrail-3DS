@@ -21,7 +21,18 @@ namespace platform3ds {
 enum HudAction {
     HUD_ACTION_NONE,
     HUD_ACTION_SAVE,
-    HUD_ACTION_STATE_CHANGED
+    HUD_ACTION_STATE_CHANGED,
+    HUD_ACTION_SWAP_SCREENS
+};
+
+enum StartMenuPage {
+    START_MENU_MAIN,
+    START_MENU_LOAD,
+    START_MENU_SAVE,
+    START_MENU_CONFIRM_NEW_GAME,
+    START_MENU_CONFIRM_OVERWRITE,
+    START_MENU_PREFERENCES,
+    START_MENU_ABOUT
 };
 
 class HudView {
@@ -34,11 +45,17 @@ public:
     void dispose();
     HudAction handle_touch(int x, int y);
     bool handle_keys(u32 keys_down, HudAction &action);
+    void handle_touch_move(int x, int y);
+    void end_touch();
     void set_combat_message(const std::string &message);
     void set_notice(const std::string &message);
-    void draw() const;
+    void draw(int screen_offset_x = 0) const;
     void draw_combat_overlay() const;
     void draw_interaction(const char *text) const;
+    void draw_encounter_options(int selected) const;
+    void draw_start_title() const;
+    void draw_start_screen(StartMenuPage page, int selected,
+        const std::vector<std::string> &entries, const std::string &message) const;
 
 private:
     enum Screen {
@@ -90,11 +107,13 @@ private:
 
     bool load_images(std::string &error);
     void draw_status() const;
-    void draw_hero_info() const;
+    void draw_hero_info(int screen_offset_x) const;
     void draw_level_up() const;
     void draw_quick_items() const;
     void draw_toolbox() const;
     void refresh_quest_log() const;
+    void select_skill(int selection, std::size_t skill_count);
+    HudAction learn_selected_skill();
     std::vector<int> filtered_inventory_indices() const;
     bool inventory_properties(const std::string &item_id,
         items::InventoryProperties &properties) const;
@@ -115,6 +134,8 @@ private:
     GameResources *resources_;
     C2D_SpriteSheet sheets_[ICON_COUNT];
     C2D_Image images_[ICON_COUNT];
+    C2D_SpriteSheet title_sheets_[4];
+    C2D_Image title_images_[4];
     mutable Tex3DS_SubTexture quickslot_closed_;
     mutable Tex3DS_SubTexture quickslot_open_;
     mutable Tex3DS_SubTexture selection_yellow_;
@@ -126,6 +147,9 @@ private:
     Screen screen_;
     int hero_tab_;
     int selected_level_up_;
+    mutable int overview_scroll_;
+    mutable int overview_scroll_offset_;
+    mutable int overview_max_scroll_;
     int inventory_scroll_;
     int selected_inventory_index_;
     int inventory_category_;
@@ -133,7 +157,18 @@ private:
     int selected_quick_slot_;
     int selected_equipment_slot_;
     mutable int quest_scroll_;
-    int skill_scroll_;
+    mutable int skill_scroll_;
+    mutable int skill_scroll_offset_;
+    int skill_selection_;
+    bool skill_touch_active_;
+    bool skill_touch_dragging_;
+    int skill_touch_start_y_;
+    int skill_touch_last_y_;
+    int skill_touch_selection_;
+    bool overview_touch_active_;
+    bool overview_touch_dragging_;
+    int overview_touch_start_y_;
+    int overview_touch_last_y_;
     bool toolbox_open_;
     std::string combat_message_;
     std::string notice_;

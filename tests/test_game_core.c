@@ -307,9 +307,31 @@ int main(int argc, char **argv)
     assert(core.condition_count == 1 && core.conditions[0].immunity);
     assert(game_core_random(&core, 1000) == random_after_load);
 
+    core.gold = 31;
+    assert(game_core_set_current_map(&core, "crossglen", 3, 4));
+    assert(game_core_save(&core, save_path));
+    game_core_init(&core);
+    assert(game_core_load(&core, save_path) == GAME_CORE_LOAD_OK);
+    assert(core.gold == 31);
+    assert(strcmp(core.current_map_id, "crossglen") == 0);
+    assert(core.current_map_x == 3 && core.current_map_y == 4);
+
+    char backup_path[256];
+    assert(snprintf(backup_path, sizeof(backup_path), "%s.bak", save_path)
+        < (int)sizeof(backup_path));
+    assert(rename(save_path, backup_path) == 0);
+    game_core_init(&core);
+    assert(game_core_load(&core, save_path) == GAME_CORE_LOAD_OK);
+    assert(core.gold == 31);
+    core.gold = 32;
+    assert(game_core_save(&core, save_path));
+    game_core_init(&core);
+    assert(game_core_load(&core, save_path) == GAME_CORE_LOAD_OK);
+    assert(core.gold == 32);
+
     write_invalid_save(invalid_path);
     assert(game_core_load(&core, invalid_path) == GAME_CORE_LOAD_ERROR);
-    assert(core.gold == 24);
+    assert(core.gold == 32);
     assert(game_core_quest_progress(&core, "mikhail_bread") == 10);
     assert(game_core_inventory_count(&core, "bread") == 2);
 
@@ -346,6 +368,7 @@ int main(int argc, char **argv)
     assert(core.health == core.max_health);
 
     assert(remove(save_path) == 0);
+    remove(backup_path);
     assert(remove(invalid_path) == 0);
     free(invalid_path);
     puts("game core state tests passed");

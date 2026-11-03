@@ -580,7 +580,9 @@ bool find_path_step(const Document &document, GridPosition from,
 
 bool move_player(const Document &document, GridPosition &position, int dx, int dy)
 {
-    if (std::abs(dx) + std::abs(dy) != 1) return false;
+    if ((dx == 0 && dy == 0) || std::abs(dx) > 1 || std::abs(dy) > 1) {
+        return false;
+    }
     const GridPosition next = {position.x + dx, position.y + dy};
     if (!is_walkable(document, next.x, next.y)) return false;
     position = next;
@@ -634,10 +636,15 @@ ViewTransform camera_for_player(
     const Document &document,
     GridPosition player,
     int screen_width,
-    int screen_height
+    int screen_height,
+    float scaling_factor
 )
 {
-    const int tile_size = document.tile_width > 0 ? document.tile_width : android_tile_size;
+    const int base_tile_size = document.tile_width > 0
+        ? document.tile_width : android_tile_size;
+    const int tile_size = scaling_factor > 0.0f
+        ? std::max(1, static_cast<int>(base_tile_size * scaling_factor + 0.5f))
+        : base_tile_size;
     const int screen_columns = screen_width > 0 ? screen_width / tile_size : 0;
     const int screen_rows = screen_height > 0 ? screen_height / tile_size : 0;
     ViewTransform view = {};
