@@ -57,8 +57,8 @@ and [graphics contributions](https://github.com/AndorsTrailMods/andors-trail/blo
 The app opens on a source-labeled start menu. Continue resumes the hidden
 quicksave; New game confirms before replacing an existing quicksave; Load opens
 numbered manual save slots. Preferences exposes 3DS-native options for screen
-placement, Circle Pad movement, touch movement, and scaling (0.5x, 0.75x, 1x,
-1.5x, and 2x). Scaling zooms the map by changing tile size and the visible map
+placement, Circle Pad movement, touch movement, and scaling (0.75x and 1x).
+Scaling zooms the map by changing tile size and the visible map
 area; menus, HUD, and dialogs remain at their normal screen size. Map touch
 movement follows the zoomed camera. The About / Help page keeps
 the original section names, while detailed Android help content is not bundled.
@@ -152,7 +152,9 @@ three-minute window restore encounters, and older maps reset non-unique
 monsters while retaining unique ones. Resting and player defeat apply the
 source encounter reset behavior.
 
-The broader world and script-driven spawn-area activation are still incomplete,
+Conversation-driven spawn-area activation, deactivation, and removal are
+persisted. Effects for the current map apply immediately; effects for other
+maps apply when those maps load. Other world/script effects remain incomplete,
 so encounter behavior outside the bundled gameplay slice can differ from
 Android.
 The world-map view is unavailable until the original visited-map tiles are

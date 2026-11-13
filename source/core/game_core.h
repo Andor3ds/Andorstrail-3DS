@@ -10,6 +10,7 @@
 #define GAME_CORE_MAX_CONDITIONS 64
 #define GAME_CORE_MAX_ENEMY_CONDITIONS 256
 #define GAME_CORE_MAX_MAP_STATES 2048
+#define GAME_CORE_MAX_SPAWN_AREA_STATES 1024
 #define GAME_CORE_MAX_SAVED_ENEMIES 512
 #define GAME_CORE_EQUIPMENT_SLOTS 9
 #define GAME_CORE_QUICK_SLOTS 3
@@ -49,6 +50,14 @@ typedef struct {
 
 typedef struct {
     char map_id[GAME_CORE_ID_CAPACITY];
+    char area_id[GAME_CORE_ID_CAPACITY];
+    bool active;
+    bool remove_all;
+    bool spawn_all;
+} GameCoreSpawnAreaState;
+
+typedef struct {
+    char map_id[GAME_CORE_ID_CAPACITY];
     char instance_id[GAME_CORE_ID_CAPACITY];
     char monster_id[GAME_CORE_ID_CAPACITY];
     int spawn_area_index;
@@ -57,6 +66,7 @@ typedef struct {
     int health;
     int action_points;
     bool unique;
+    bool force_aggressive;
 } GameCoreSavedEnemy;
 
 typedef enum {
@@ -96,6 +106,8 @@ typedef struct {
     size_t enemy_condition_count;
     GameCoreMapState map_states[GAME_CORE_MAX_MAP_STATES];
     size_t map_state_count;
+    GameCoreSpawnAreaState spawn_area_states[GAME_CORE_MAX_SPAWN_AREA_STATES];
+    size_t spawn_area_state_count;
     GameCoreSavedEnemy saved_enemies[GAME_CORE_MAX_SAVED_ENEMIES];
     size_t saved_enemy_count;
     char equipment[GAME_CORE_EQUIPMENT_SLOTS][GAME_CORE_ID_CAPACITY];
@@ -104,6 +116,8 @@ typedef struct {
     size_t inventory_count;
     GameCoreValue skills[GAME_CORE_MAX_VALUES];
     size_t skill_count;
+    GameCoreValue alignments[GAME_CORE_MAX_VALUES];
+    size_t alignment_count;
 } GameCore;
 
 typedef enum {
@@ -121,6 +135,9 @@ void game_core_update(GameCore *core);
 void game_core_shutdown(GameCore *core);
 int game_core_quest_progress(const GameCore *core, const char *id);
 bool game_core_set_quest_progress(GameCore *core, const char *id, int progress);
+int game_core_alignment(const GameCore *core, const char *id);
+bool game_core_set_alignment(GameCore *core, const char *id, int alignment);
+bool game_core_add_alignment(GameCore *core, const char *id, int delta);
 int game_core_skill_level(const GameCore *core, const char *id);
 bool game_core_set_skill_level(GameCore *core, const char *id, int level);
 int game_core_inventory_count(const GameCore *core, const char *id);
@@ -145,6 +162,14 @@ bool game_core_set_map_state(GameCore *core, const char *map_id,
     uint64_t last_visit_time_ms, bool visited);
 bool game_core_get_map_state(const GameCore *core, const char *map_id,
     uint64_t *last_visit_time_ms, bool *visited);
+bool game_core_set_spawn_area_active(GameCore *core, const char *map_id,
+    const char *area_id, bool active);
+bool game_core_get_spawn_area_active(const GameCore *core, const char *map_id,
+    const char *area_id, bool *active);
+bool game_core_set_spawn_area_state(GameCore *core, const char *map_id,
+    const char *area_id, bool active, bool remove_all, bool spawn_all);
+bool game_core_get_spawn_area_state(const GameCore *core, const char *map_id,
+    const char *area_id, bool *active, bool *remove_all, bool *spawn_all);
 bool game_core_set_map_enemies(GameCore *core, const char *map_id,
     const GameCoreSavedEnemy *enemies, size_t count);
 size_t game_core_get_map_enemies(const GameCore *core, const char *map_id,

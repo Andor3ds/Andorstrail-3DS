@@ -1,6 +1,7 @@
 #include "game_core.h"
 
 #include <assert.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +19,18 @@ static void write_version_two_save(const char *path)
     FILE *file = fopen(path, "wb");
     assert(file != NULL);
     assert(fputs("ANDORTRAIL_SAVE 2\ngold 7\nhealth 8\nrandom 2654435769\n", file) >= 0);
+    assert(fclose(file) == 0);
+}
+
+static void write_version_ten_save(const char *path)
+{
+    FILE *file = fopen(path, "wb");
+    assert(file != NULL);
+    assert(fputs("ANDORTRAIL_SAVE 10\ngold 9\nhealth 25\nmax_health 25\nlevel 1\n"
+        "experience 1\nattack_chance 60\nattack_damage 1\nblock_chance 0\n"
+        "critical_skill 0\ncritical_multiplier 1\nskill_points 0\n"
+        "random 2654435769\nenemy_spawn_sequence 0\n"
+        "map_enemy home old_npc merchant 0 1 1 10 5 1\n", file) >= 0);
     assert(fclose(file) == 0);
 }
 
@@ -228,6 +241,19 @@ int main(int argc, char **argv)
     assert(game_core_set_enemy_conditions(&core, "home", "mikhail_rat1",
         &enemy_condition, 1));
     assert(game_core_set_map_state(&core, "home", 123456789, true));
+    assert(game_core_set_spawn_area_state(&core, "home",
+        "aidem_base_thieves", false, true, false));
+    assert(game_core_set_spawn_area_state(&core, "home",
+        "aidem_base_alaric_aggressive_spawn", true, false, true));
+    assert(!game_core_set_spawn_area_active(&core, "invalid map",
+        "spawn_area", true));
+    assert(game_core_set_alignment(&core, "bandits", -3));
+    assert(game_core_add_alignment(&core, "bandits", 1));
+    assert(game_core_set_alignment(&core, "neutral", 0));
+    assert(game_core_add_alignment(&core, "wrap", INT_MAX));
+    assert(game_core_add_alignment(&core, "wrap", 1));
+    assert(game_core_alignment(&core, "wrap") == INT_MIN);
+    assert(!game_core_set_alignment(&core, "invalid id", 1));
     GameCoreSavedEnemy saved_enemy = {0};
     strcpy(saved_enemy.instance_id, "enc_home_0");
     strcpy(saved_enemy.monster_id, "trainingrat");
@@ -245,6 +271,7 @@ int main(int argc, char **argv)
     unique_enemy.health = 8;
     unique_enemy.action_points = 5;
     unique_enemy.unique = true;
+    unique_enemy.force_aggressive = true;
     GameCoreSavedEnemy saved_enemies[] = {saved_enemy, unique_enemy};
     assert(game_core_set_map_enemies(&core, "home", saved_enemies, 2));
     assert(game_core_set_enemy_conditions(&core, "home", "enc_home_0",
@@ -261,11 +288,29 @@ int main(int argc, char **argv)
     assert(core.attack_damage == 2 && core.block_chance == 3 && core.skill_points == 1);
     assert(core.critical_skill == 21 && core.critical_multiplier == 1.75f);
     assert(core.enemy_spawn_sequence == 53);
+    assert(game_core_alignment(&core, "bandits") == -2);
+    assert(game_core_alignment(&core, "neutral") == 0);
+    assert(game_core_alignment(&core, "wrap") == INT_MIN);
     uint64_t last_visit_time_ms = 0;
     bool map_visited = false;
     assert(game_core_get_map_state(&core, "home", &last_visit_time_ms,
         &map_visited));
     assert(last_visit_time_ms == 123456789 && map_visited);
+    bool spawn_area_active = true;
+    bool remove_all_spawn_area_monsters = false;
+    bool spawn_all_in_area = false;
+    assert(game_core_get_spawn_area_state(&core, "home",
+        "aidem_base_thieves", &spawn_area_active,
+        &remove_all_spawn_area_monsters, &spawn_all_in_area));
+    assert(!spawn_area_active && remove_all_spawn_area_monsters
+        && !spawn_all_in_area);
+    assert(game_core_get_spawn_area_state(&core, "home",
+        "aidem_base_alaric_aggressive_spawn", &spawn_area_active,
+        &remove_all_spawn_area_monsters, &spawn_all_in_area));
+    assert(spawn_area_active && !remove_all_spawn_area_monsters
+        && spawn_all_in_area);
+    assert(!game_core_get_spawn_area_active(&core, "home",
+        "missing_spawn_area", &spawn_area_active));
     GameCoreSavedEnemy loaded_enemies[2] = {};
     assert(game_core_get_map_enemies(&core, "home", loaded_enemies, 2) == 2);
     GameCoreSavedEnemy loaded_enemy = loaded_enemies[0];
@@ -287,6 +332,7 @@ int main(int argc, char **argv)
     assert(game_core_get_map_enemies(&core, "home", &retained_unique, 1) == 1);
     assert(strcmp(retained_unique.instance_id, "named_unique") == 0);
     assert(retained_unique.unique);
+    assert(retained_unique.force_aggressive);
     assert(game_core_get_enemy_conditions(&core, "home", "enc_home_0",
         NULL, 0) == 0);
     assert(game_core_quick_item(&core, 0) == NULL);
@@ -361,6 +407,13 @@ int main(int argc, char **argv)
     assert(game_core_load(&core, invalid_path) == GAME_CORE_LOAD_ERROR);
     assert(core.gold == 9);
     assert(game_core_skill_level(&core, "weaponChance") == 2);
+
+    write_version_ten_save(invalid_path);
+    assert(game_core_load(&core, invalid_path) == GAME_CORE_LOAD_OK);
+    assert(core.gold == 9 && game_core_alignment(&core, "bandits") == 0);
+    GameCoreSavedEnemy legacy_enemy = {};
+    assert(game_core_get_map_enemies(&core, "home", &legacy_enemy, 1) == 1);
+    assert(!legacy_enemy.force_aggressive);
 
     assert(game_core_damage_player(&core, GAME_CORE_MAX_HEALTH));
     assert(core.health == 0);

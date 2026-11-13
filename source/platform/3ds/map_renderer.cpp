@@ -179,6 +179,7 @@ const char *monster_difficulty_name(int difficulty)
 MapRenderer::MapRenderer()
     : player_({0, 0}), resources_(NULL), core_(NULL), conversation_(NULL, NULL),
       selected_conversation_reply_(0), player_image_({NULL, NULL}),
+      map_textures_filtered_(false),
       modal_interaction_(false), shop_interaction_(false), initialized_(false),
       player_action_points_(0), maximum_player_action_points_(10),
       last_player_action_ap_(0), last_player_action_max_ap_(10),
@@ -188,7 +189,7 @@ MapRenderer::MapRenderer()
       combat_active_(false), monster_turn_active_(false),
       encounter_pending_(false), encounter_info_open_(false),
       encounter_selection_(0),
-      next_combat_enemy_action_ms_(0), combat_enemy_actions_(0),
+      next_combat_enemy_action_ms_(0),
       next_respawn_check_ms_(0),
       last_round_update_ms_(0), round_tick_accumulator_ms_(0),
       ticks_until_next_round_(TICKS_PER_ROUND),
@@ -211,15 +212,18 @@ void MapRenderer::dispose()
     image_names_.clear();
     image_indices_.clear();
     tile_subtextures_.clear();
+    actor_icon_slots_.clear();
     document_ = map::Document();
     translated_ = map::TranslatedDocument();
     maps_directory_.clear();
     interaction_message_.clear();
+    conversation_enemy_instance_id_.clear();
     conversation_.set_context(NULL, NULL);
     resources_ = NULL;
     core_ = NULL;
     selected_conversation_reply_ = 0;
     player_image_ = {NULL, NULL};
+    map_textures_filtered_ = false;
     modal_interaction_ = false;
     shop_interaction_ = false;
     encounter_pending_ = false;
@@ -249,7 +253,6 @@ void MapRenderer::dispose()
     declined_enemy_instance_id_.clear();
     active_combat_enemy_id_.clear();
     next_combat_enemy_action_ms_ = 0;
-    combat_enemy_actions_ = 0;
     selected_enemy_instance_id_.clear();
     next_respawn_check_ms_ = 0;
     last_round_update_ms_ = 0;
@@ -285,6 +288,40 @@ bool MapRenderer::initialize(
         return false;
     }
     if (!load_tileset_sheets(tileset_list_path, texture_directory, error)) {
+        dispose();
+        return false;
+    }
+    const std::string actor_icon_list =
+        std::string(texture_directory) + "/actor_icons.list";
+    FILE *actor_icons = std::fopen(actor_icon_list.c_str(), "rb");
+    if (actor_icons == NULL) {
+        error = "cannot open actor icon atlas index: " + actor_icon_list;
+        dispose();
+        return false;
+    }
+    char actor_line[256];
+    while (std::fgets(actor_line, sizeof(actor_line), actor_icons) != NULL) {
+        char sheet_name[128];
+        unsigned int icon_index = 0;
+        unsigned int slot = 0;
+        char trailing = '\0';
+        const int fields = std::sscanf(actor_line, "%127s %u %u %c",
+            sheet_name, &icon_index, &slot, &trailing);
+        if (fields != 3 || std::strchr(sheet_name, '/') != NULL
+                || std::strchr(sheet_name, '\\') != NULL
+                || !actor_icon_slots_.insert(std::make_pair(
+                    std::make_pair(std::string(sheet_name), icon_index),
+                    slot)).second) {
+            std::fclose(actor_icons);
+            error = "invalid actor icon atlas index entry";
+            dispose();
+            return false;
+        }
+    }
+    const bool actor_icons_failed = std::ferror(actor_icons) != 0;
+    std::fclose(actor_icons);
+    if (actor_icons_failed || actor_icon_slots_.empty()) {
+        error = "failed while reading actor icon atlas index";
         dispose();
         return false;
     }
@@ -401,6 +438,9 @@ bool MapRenderer::initialize_enemies(std::string &error)
     selected_enemy_instance_id_.clear();
     spawn_candidates_.assign(translated_.spawn_areas.size(),
         std::vector<const GameResourceRecordEntry *>());
+    spawn_area_active_.assign(translated_.spawn_areas.size(), false);
+    spawn_area_remove_all_pending_.assign(translated_.spawn_areas.size(), false);
+    spawn_area_spawn_all_pending_.assign(translated_.spawn_areas.size(), false);
     spawn_area_unique_.assign(translated_.spawn_areas.size(), false);
     spawn_area_has_npc_.assign(translated_.spawn_areas.size(), false);
     next_respawn_check_ms_ = 0;
@@ -457,7 +497,18 @@ bool MapRenderer::initialize_enemies(std::string &error)
         if (area.quantity > 0 && global_spawn_index <= INT_MAX - area.quantity) {
             global_spawn_index += area.quantity;
         }
-        if (!area.active_for_new_game) continue;
+        bool active = area.active_for_new_game;
+        bool remove_all_pending = false;
+        bool spawn_all_pending = false;
+        bool saved_active = false;
+        if (game_core_get_spawn_area_state(core_, document_.name.c_str(),
+                area.name.c_str(), &saved_active, &remove_all_pending,
+                &spawn_all_pending)) {
+            active = saved_active;
+        }
+        spawn_area_active_[area_index] = active;
+        spawn_area_remove_all_pending_[area_index] = remove_all_pending;
+        spawn_area_spawn_all_pending_[area_index] = spawn_all_pending;
         std::vector<const GameResourceRecordEntry *> candidates;
         for (std::map<std::string, std::vector<const GameResourceRecordEntry *> >::const_iterator
                 group = records_by_group.begin(); group != records_by_group.end(); ++group) {
@@ -562,6 +613,16 @@ bool MapRenderer::initialize_enemies(std::string &error)
             }
             continue;
         }
+        if (area_index < spawn_area_remove_all_pending_.size()
+                && spawn_area_remove_all_pending_[area_index]) {
+            if (!game_core_set_enemy_conditions(core_, document_.name.c_str(),
+                    saved.instance_id, NULL, 0)) {
+                error = "inactive spawn-area monster state could not be cleared: "
+                    + std::string(saved.instance_id);
+                return false;
+            }
+            continue;
+        }
         saved.spawn_area_index = static_cast<int>(area_index);
         const map::SpawnArea &area = translated_.spawn_areas[area_index];
         const std::string defeated_key =
@@ -610,6 +671,10 @@ bool MapRenderer::initialize_enemies(std::string &error)
         enemy.health = saved.health;
         enemy.action_points = saved.action_points;
         enemy.unique = spawn_area_unique_[area_index];
+        enemy.force_aggressive = saved.force_aggressive;
+        enemy.aggressive = enemy.phrase_id.empty() || enemy.force_aggressive
+            || (core_ != NULL && !enemy.faction_id.empty()
+                && game_core_alignment(core_, enemy.faction_id.c_str()) < 0);
         if (!restore_enemy_conditions(enemy, error)) return false;
         enemies_.push_back(enemy);
     }
@@ -624,8 +689,10 @@ bool MapRenderer::initialize_enemies(std::string &error)
         const bool seed_area = !recently_visited
             || area.spawn_group == "trainingrat"
             || spawn_area_has_npc_[area_index];
-        if (!seed_area || !area.active_for_new_game || candidates.empty()
+        if ((!seed_area && !spawn_area_spawn_all_pending_[area_index])
+                || !spawn_area_active_[area_index] || candidates.empty()
                 || (spawn_area_unique_[area_index] && visited
+                    && !spawn_area_spawn_all_pending_[area_index]
                     && !spawn_area_has_npc_[area_index])) continue;
 
         std::size_t alive_in_area = 0;
@@ -735,7 +802,21 @@ bool MapRenderer::initialize_enemies(std::string &error)
         }
     }
 
-    return persist_current_map_state(true, error);
+    if (!persist_current_map_state(true, error)) return false;
+    for (std::size_t area_index = 0;
+            area_index < translated_.spawn_areas.size(); ++area_index) {
+        if (!spawn_area_remove_all_pending_[area_index]
+                && !spawn_area_spawn_all_pending_[area_index]) continue;
+        const map::SpawnArea &area = translated_.spawn_areas[area_index];
+        if (!game_core_set_spawn_area_state(core_, document_.name.c_str(),
+                area.name.c_str(), spawn_area_active_[area_index], false, false)) {
+            error = "loaded spawn-area effects could not be completed: "
+                + area.name;
+            return false;
+        }
+    }
+    error.clear();
+    return true;
 }
 
 bool MapRenderer::initialize_enemy(const map::SpawnArea &area, int spawn_index,
@@ -748,6 +829,7 @@ bool MapRenderer::initialize_enemy(const map::SpawnArea &area, int spawn_index,
     if (!game_resources_open_record(resources_, record, &document, &monster)) return false;
 
     std::string phrase_id;
+    std::string faction_id;
     std::string icon_id;
     std::string drop_list_id;
     std::string name;
@@ -758,6 +840,7 @@ bool MapRenderer::initialize_enemy(const map::SpawnArea &area, int spawn_index,
     int attack_chance = 0;
     int unique_value = 0;
     bool valid = json_string_or_empty(monster, "phraseID", phrase_id)
+        && json_string_or_empty(monster, "faction", faction_id)
         && json_string_or_empty(monster, "iconID", icon_id)
         && json_string_or_empty(monster, "droplistID", drop_list_id)
         && json_string_or_empty(monster, "name", name)
@@ -793,6 +876,8 @@ bool MapRenderer::initialize_enemy(const map::SpawnArea &area, int spawn_index,
     enemy.monster_id = record->id;
     enemy.drop_list_id = drop_list_id;
     enemy.name = name;
+    enemy.phrase_id = phrase_id;
+    enemy.faction_id = faction_id;
     enemy.icon_sheet = icon_id.substr(0, separator) + ".png";
     enemy.icon_index = static_cast<unsigned int>(icon_index);
     enemy.spawn_area = area.tile_rect;
@@ -816,11 +901,23 @@ bool MapRenderer::initialize_enemy(const map::SpawnArea &area, int spawn_index,
         : aggression_name == "flee" ? 4 : 0;
     enemy.critical_immune = monster_class_name == "ghost"
         || monster_class_name == "construct" || monster_class_name == "demon";
-    enemy.aggressive = phrase_id.empty();
+    enemy.force_aggressive = false;
+    enemy.aggressive = phrase_id.empty() || (core_ != NULL
+        && !faction_id.empty()
+        && game_core_alignment(core_, faction_id.c_str()) < 0);
     enemy.unique = unique_value > 0;
     enemy.has_destination = false;
     enemy.next_action_time_ms = 0;
     return true;
+}
+
+void MapRenderer::refresh_enemy_aggressiveness()
+{
+    for (EnemyState &enemy : enemies_) {
+        enemy.aggressive = enemy.phrase_id.empty() || enemy.force_aggressive
+            || (core_ != NULL && !enemy.faction_id.empty()
+                && game_core_alignment(core_, enemy.faction_id.c_str()) < 0);
+    }
 }
 
 bool MapRenderer::persist_enemy_conditions(const EnemyState &enemy,
@@ -931,6 +1028,7 @@ bool MapRenderer::persist_current_map_state(bool update_visit_time,
         saved.health = enemy.health;
         saved.action_points = enemy.action_points;
         saved.unique = enemy.unique;
+        saved.force_aggressive = enemy.force_aggressive;
         if (enemy.instance_id.empty()
                 || enemy.instance_id.size() >= GAME_CORE_ID_CAPACITY
                 || enemy.monster_id.empty()
@@ -1376,7 +1474,9 @@ bool MapRenderer::update_spawn_areas(std::uint64_t current_time_ms,
     for (std::size_t area_index = 0;
             area_index < translated_.spawn_areas.size(); ++area_index) {
         const map::SpawnArea &area = translated_.spawn_areas[area_index];
-        if (!area.active_for_new_game || area_index >= spawn_candidates_.size()
+        if (area_index >= spawn_area_active_.size()
+                || !spawn_area_active_[area_index]
+                || area_index >= spawn_candidates_.size()
                 || area_index >= spawn_area_unique_.size()
                 || spawn_area_unique_[area_index]
                 || spawn_candidates_[area_index].empty()) continue;
@@ -1615,7 +1715,6 @@ void MapRenderer::resolve_monster_turn(std::string &message,
     }
 
     active_combat_enemy_id_.clear();
-    combat_enemy_actions_ = 0;
     monster_turn_active_ = true;
     next_combat_enemy_action_ms_ = last_round_update_ms_
         + COMBAT_ACTION_INTERVAL_MS;
@@ -1661,15 +1760,12 @@ void MapRenderer::advance_monster_turn(std::uint64_t current_time_ms)
         }
     }
 
-    const std::size_t maximum_actions = std::max<std::size_t>(32,
-        enemies_.size() * 32);
-    if (next_enemy == NULL || combat_enemy_actions_ >= maximum_actions) {
+    if (next_enemy == NULL) {
         monster_turn_active_ = false;
         finish_monster_turn(interaction_message_);
         return;
     }
     active_combat_enemy_id_ = next_enemy->instance_id;
-    ++combat_enemy_actions_;
     update_enemy_turn(*next_enemy, interaction_message_);
     if (!combat_active_) {
         monster_turn_active_ = false;
@@ -2090,6 +2186,7 @@ bool MapRenderer::load_tileset_sheets(
             return false;
         }
         C3D_TexSetFilter(whole.tex, GPU_NEAREST, GPU_NEAREST);
+        C3D_TexSetWrap(whole.tex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
 
         const std::size_t index = sheets_.size();
         sheets_.push_back(sheet);
@@ -2323,6 +2420,10 @@ static bool key_requirement_met(const map::Requirement &requirement, const GameC
     bool met = false;
     if (requirement.type == "questProgress" || requirement.type == "questLatestProgress") {
         met = game_core_quest_progress(core, requirement.id.c_str()) == requirement.value;
+    } else if (requirement.type == "factionScore") {
+        met = game_core_alignment(core, requirement.id.c_str()) >= requirement.value;
+    } else if (requirement.type == "factionScoreEquals") {
+        met = game_core_alignment(core, requirement.id.c_str()) == requirement.value;
     } else {
         return false;
     }
@@ -2409,6 +2510,14 @@ bool MapRenderer::move_player(int dx, int dy)
             interact_with_mara();
             return true;
         }
+        for (EnemyState &enemy : enemies_) {
+            if (!enemy.aggressive && !enemy.phrase_id.empty()
+                    && !map::is_adjacent(previous, enemy.position)
+                    && map::is_adjacent(player_, enemy.position)) {
+                interact_with_enemy(enemy);
+                return true;
+            }
+        }
         if (!declined_enemy_instance_id_.empty()) {
             bool still_adjacent = false;
             for (const EnemyState &enemy : enemies_) {
@@ -2462,6 +2571,12 @@ bool MapRenderer::interact()
     if (can_talk_to_mikhail()) {
         return interact_with_mikhail();
     }
+    for (EnemyState &enemy : enemies_) {
+        if (!enemy.aggressive && !enemy.phrase_id.empty()
+                && map::is_adjacent(player_, enemy.position)) {
+            return interact_with_enemy(enemy);
+        }
+    }
     interaction_message_.clear();
     shop_interaction_ = false;
     modal_interaction_ = false;
@@ -2487,16 +2602,186 @@ bool MapRenderer::can_shop_with_mara() const
 bool MapRenderer::interact_with_mikhail()
 {
     std::string error;
+    conversation_enemy_instance_id_.clear();
     if (!conversation_.start("mikhail_start_select", error)) {
         interaction_message_ = "Mikhail: " + error;
         modal_interaction_ = true;
         return false;
     }
+    if (!apply_conversation_spawn_effects(error)) {
+        interaction_message_ = "Mikhail: " + error;
+        modal_interaction_ = true;
+        return false;
+    }
+    refresh_enemy_aggressiveness();
     selected_conversation_reply_ = 0;
     interaction_message_ = "Mikhail\n" + conversation_.message();
     shop_interaction_ = false;
     modal_interaction_ = true;
+    if (conversation_.terminal_action() != dialogue::Conversation::TerminalActionNone) {
+        return handle_conversation_terminal(error);
+    }
     return true;
+}
+
+bool MapRenderer::interact_with_enemy(EnemyState &enemy)
+{
+    std::string error;
+    const std::string speaker = enemy.name;
+    conversation_enemy_instance_id_ = enemy.instance_id;
+    if (!conversation_.start(enemy.phrase_id, error)) {
+        interaction_message_ = speaker + ": " + error;
+        modal_interaction_ = true;
+        return false;
+    }
+    if (!apply_conversation_spawn_effects(error)) {
+        interaction_message_ = speaker + ": " + error;
+        modal_interaction_ = true;
+        return false;
+    }
+    selected_conversation_reply_ = 0;
+    interaction_message_ = speaker + "\n" + conversation_.message();
+    shop_interaction_ = false;
+    modal_interaction_ = true;
+    refresh_enemy_aggressiveness();
+    if (conversation_.terminal_action() != dialogue::Conversation::TerminalActionNone) {
+        return handle_conversation_terminal(error);
+    }
+    return true;
+}
+
+bool MapRenderer::apply_conversation_spawn_effects(std::string &error)
+{
+    const std::vector<dialogue::SpawnAreaEffect> effects =
+        conversation_.take_spawn_area_effects();
+    for (const dialogue::SpawnAreaEffect &effect : effects) {
+        const std::string map_id = effect.map_name.empty()
+            ? document_.name : effect.map_name;
+        std::size_t area_index = translated_.spawn_areas.size();
+        if (map_id == document_.name) {
+            for (std::size_t index = 0;
+                    index < translated_.spawn_areas.size(); ++index) {
+                if (translated_.spawn_areas[index].name != effect.area_id) continue;
+                area_index = index;
+                break;
+            }
+            if (area_index == translated_.spawn_areas.size()) {
+                error = "conversation spawn area not found: " + effect.area_id;
+                return false;
+            }
+        }
+        if (!game_core_set_spawn_area_state(core_, map_id.c_str(),
+                effect.area_id.c_str(), effect.active, effect.remove_all,
+                effect.spawn_all)) {
+            error = "conversation spawn area state could not be saved: "
+                + effect.area_id;
+            return false;
+        }
+        if (map_id != document_.name) continue;
+
+        spawn_area_active_[area_index] = effect.active;
+        if (effect.remove_all) {
+            std::size_t enemy_index = 0;
+            while (enemy_index < enemies_.size()) {
+                const EnemyState &enemy = enemies_[enemy_index];
+                if (enemy.spawn_area_index != area_index) {
+                    ++enemy_index;
+                    continue;
+                }
+                if (!game_core_set_enemy_conditions(core_, document_.name.c_str(),
+                        enemy.instance_id.c_str(), NULL, 0)) {
+                    error = "removed spawn-area monster state could not be cleared: "
+                        + enemy.instance_id;
+                    return false;
+                }
+                enemies_.erase(enemies_.begin() + enemy_index);
+            }
+        }
+        if (effect.spawn_all) {
+            const map::SpawnArea &area = translated_.spawn_areas[area_index];
+            while (area.quantity > 0) {
+                std::size_t alive_in_area = 0;
+                for (const EnemyState &enemy : enemies_) {
+                    if (enemy.spawn_area_index == area_index && enemy.health > 0) {
+                        ++alive_in_area;
+                    }
+                }
+                if (alive_in_area >= static_cast<std::size_t>(area.quantity)) break;
+                const std::size_t count_before = enemies_.size();
+                if (!respawn_enemy(area_index, error)) return false;
+                if (enemies_.size() == count_before) break;
+            }
+        }
+        if (!persist_current_map_state(false, error)) return false;
+        if (!game_core_set_spawn_area_state(core_, map_id.c_str(),
+                effect.area_id.c_str(), effect.active, false, false)) {
+            error = "conversation spawn area effects could not be completed: "
+                + effect.area_id;
+            return false;
+        }
+    }
+    error.clear();
+    return true;
+}
+
+bool MapRenderer::handle_conversation_terminal(std::string &error)
+{
+    const dialogue::Conversation::TerminalAction action =
+        conversation_.terminal_action();
+    if (action == dialogue::Conversation::TerminalActionClose) {
+        conversation_.close();
+        conversation_enemy_instance_id_.clear();
+        modal_interaction_ = false;
+        interaction_message_.clear();
+        error.clear();
+        return true;
+    }
+    if (action == dialogue::Conversation::TerminalActionAttack) {
+        EnemyState *target = NULL;
+        for (EnemyState &enemy : enemies_) {
+            if (enemy.instance_id == conversation_enemy_instance_id_) {
+                target = &enemy;
+                break;
+            }
+        }
+        if (target == NULL) {
+            error = "conversation requested combat without a monster target";
+            interaction_message_ = error;
+            modal_interaction_ = true;
+            return false;
+        }
+        target->force_aggressive = true;
+        refresh_enemy_aggressiveness();
+        if (!persist_current_map_state(false, error)) {
+            interaction_message_ = "Combat state could not be saved: " + error;
+            modal_interaction_ = true;
+            return false;
+        }
+        const std::string target_id = target->instance_id;
+        conversation_.close();
+        conversation_enemy_instance_id_.clear();
+        modal_interaction_ = false;
+        shop_interaction_ = false;
+        encounter_pending_ = false;
+        encounter_info_open_ = false;
+        declined_enemy_instance_id_.clear();
+        selected_enemy_instance_id_ = target_id;
+        combat_active_ = true;
+        player_action_points_ = maximum_player_action_points_;
+        interaction_message_.clear();
+        error.clear();
+        return true;
+    }
+    if (action == dialogue::Conversation::TerminalActionShop) {
+        error = "generic NPC shops are not implemented";
+    } else if (action == dialogue::Conversation::TerminalActionRemove) {
+        error = "NPC removal is not implemented";
+    } else {
+        error = "conversation ended without an action";
+    }
+    interaction_message_ = error;
+    modal_interaction_ = true;
+    return false;
 }
 
 bool MapRenderer::interact_with_mara()
@@ -2682,8 +2967,6 @@ bool MapRenderer::attack_nearby_enemy()
                 }
             }
         }
-        player_action_points_ = std::min(maximum_player_action_points_,
-            player_action_points_ + game_core_skill_level(core_, "cleave") * 3);
     }
     std::ostringstream message;
     message << "AP: " << player_action_points_ << "/" << maximum_player_action_points_
@@ -2805,6 +3088,7 @@ void MapRenderer::dismiss_modal_interaction()
         return;
     }
     conversation_.close();
+    conversation_enemy_instance_id_.clear();
     modal_interaction_ = false;
     interaction_message_.clear();
     selected_conversation_reply_ = 0;
@@ -2869,17 +3153,36 @@ void MapRenderer::move_conversation_selection(int direction)
 
 bool MapRenderer::choose_conversation_reply(std::string &error)
 {
+    std::string speaker = "Mikhail";
+    if (!conversation_enemy_instance_id_.empty()) {
+        for (const EnemyState &enemy : enemies_) {
+            if (enemy.instance_id == conversation_enemy_instance_id_) {
+                speaker = enemy.name;
+                break;
+            }
+        }
+    }
     if (!conversation_.active()) {
         error = "no conversation is active";
-        interaction_message_ = "Mikhail: " + error;
+        interaction_message_ = speaker + ": " + error;
         return false;
     }
     if (!conversation_.choose(selected_conversation_reply_, error)) {
-        interaction_message_ = "Mikhail: " + error;
+        interaction_message_ = speaker + ": " + error;
         return false;
     }
+    if (!apply_conversation_spawn_effects(error)) {
+        interaction_message_ = speaker + ": " + error;
+        return false;
+    }
+    if (conversation_.terminal_action()
+            != dialogue::Conversation::TerminalActionNone) {
+        selected_conversation_reply_ = 0;
+        return handle_conversation_terminal(error);
+    }
+    refresh_enemy_aggressiveness();
     selected_conversation_reply_ = 0;
-    interaction_message_ = "Mikhail\n" + conversation_.message();
+    interaction_message_ = speaker + "\n" + conversation_.message();
     error.clear();
     return true;
 }
@@ -2923,6 +3226,19 @@ void MapRenderer::draw_gid(std::uint32_t gid, int screen_x, int screen_y,
             || source.local_id >= tiles->second.size()) return;
     C2D_Image image = C2D_SpriteSheetGetImage(sheets_[sheet->second], 0);
     image.subtex = &tiles->second[source.local_id];
+    Tex3DS_SubTexture filtered_subtexture;
+    if (map_textures_filtered_) {
+        filtered_subtexture = *image.subtex;
+        const float u_inset = (image.subtex->right - image.subtex->left)
+            / (2.0f * image.subtex->width);
+        const float v_inset = (image.subtex->bottom - image.subtex->top)
+            / (2.0f * image.subtex->height);
+        filtered_subtexture.left += u_inset;
+        filtered_subtexture.right -= u_inset;
+        filtered_subtexture.top += v_inset;
+        filtered_subtexture.bottom -= v_inset;
+        image.subtex = &filtered_subtexture;
+    }
     C2D_DrawImageAt(image, static_cast<float>(screen_x),
         static_cast<float>(screen_y), depth, NULL, scale, scale);
 }
@@ -2947,31 +3263,86 @@ void MapRenderer::draw_actor_icon(
 void MapRenderer::draw_actor_icon_at(const char *sheet_name,
     std::uint32_t icon_index, float x, float y, float depth, float scale) const
 {
-    const std::map<std::string, std::size_t>::const_iterator sheet =
-        image_indices_.find(sheet_name);
-    if (sheet == image_indices_.end()) return;
-    const C2D_Image whole = C2D_SpriteSheetGetImage(sheets_[sheet->second], 0);
-    if (whole.subtex == NULL || whole.subtex->width % 32 != 0
-            || whole.subtex->height % 32 != 0) return;
-    const std::uint32_t columns = whole.subtex->width / 32;
-    const std::uint32_t rows = whole.subtex->height / 32;
-    if (columns == 0 || icon_index >= columns * rows) return;
-
-    const std::uint32_t tile_x = icon_index % columns;
-    const std::uint32_t tile_y = icon_index / columns;
-    const float u_range = whole.subtex->right - whole.subtex->left;
-    const float v_range = whole.subtex->bottom - whole.subtex->top;
+    unsigned int icon_tile_size = scale == 0.5f ? 16 : 32;
+    const char *atlas_name = scale == 0.5f ? "actor_atlas_050.png"
+        : scale == 0.75f ? "actor_atlas_075.png"
+        : "actor_atlas_100.png";
+    const std::map<std::pair<std::string, std::uint32_t>,
+        std::uint32_t>::const_iterator slot = actor_icon_slots_.find(
+            std::make_pair(std::string(sheet_name), icon_index));
+    float image_scale = scale;
+    std::size_t image_sheet_index = 0;
+    bool using_atlas = false;
+    if (slot != actor_icon_slots_.end()) {
+        const std::map<std::string, std::size_t>::const_iterator atlas =
+            image_indices_.find(atlas_name);
+        if (atlas != image_indices_.end()) {
+            image_sheet_index = atlas->second;
+            using_atlas = true;
+            image_scale = icon_tile_size == 32 ? scale : 1.0f;
+        }
+    }
+    if (!using_atlas) {
+        const std::map<std::string, std::size_t>::const_iterator sheet =
+            image_indices_.find(sheet_name);
+        if (sheet == image_indices_.end()) return;
+        image_sheet_index = sheet->second;
+        icon_tile_size = 32;
+    }
+    const C2D_Image whole = C2D_SpriteSheetGetImage(
+        sheets_[image_sheet_index], 0);
+    if (whole.subtex == NULL) return;
     Tex3DS_SubTexture subtexture;
-    subtexture.width = 32;
-    subtexture.height = 32;
-    subtexture.left = whole.subtex->left + (tile_x * 32.0f / whole.subtex->width) * u_range;
-    subtexture.right = whole.subtex->left + ((tile_x + 1) * 32.0f / whole.subtex->width) * u_range;
-    subtexture.top = whole.subtex->top + (tile_y * 32.0f / whole.subtex->height) * v_range;
-    subtexture.bottom = whole.subtex->top + ((tile_y + 1) * 32.0f / whole.subtex->height) * v_range;
+    if (!using_atlas) {
+        if (whole.subtex->width % 32 != 0 || whole.subtex->height % 32 != 0) return;
+        const std::uint32_t columns = whole.subtex->width / 32;
+        const std::uint32_t rows = whole.subtex->height / 32;
+        if (columns == 0 || icon_index >= columns * rows) return;
+        const std::uint32_t tile_x = icon_index % columns;
+        const std::uint32_t tile_y = icon_index / columns;
+        const float u_range = whole.subtex->right - whole.subtex->left;
+        const float v_range = whole.subtex->bottom - whole.subtex->top;
+        subtexture.width = 32;
+        subtexture.height = 32;
+        subtexture.left = whole.subtex->left
+            + (tile_x * 32.0f / whole.subtex->width) * u_range;
+        subtexture.right = whole.subtex->left
+            + ((tile_x + 1) * 32.0f / whole.subtex->width) * u_range;
+        subtexture.top = whole.subtex->top
+            + (tile_y * 32.0f / whole.subtex->height) * v_range;
+        subtexture.bottom = whole.subtex->top
+            + ((tile_y + 1) * 32.0f / whole.subtex->height) * v_range;
+    } else {
+        const std::uint32_t tile_x = slot->second % 8;
+        const std::uint32_t tile_y = slot->second / 8;
+        const float u_range = whole.subtex->right - whole.subtex->left;
+        const float v_range = whole.subtex->bottom - whole.subtex->top;
+        subtexture.width = static_cast<u16>(icon_tile_size);
+        subtexture.height = static_cast<u16>(icon_tile_size);
+        subtexture.left = whole.subtex->left
+            + (tile_x * icon_tile_size / static_cast<float>(whole.subtex->width)) * u_range;
+        subtexture.right = whole.subtex->left
+            + ((tile_x + 1) * icon_tile_size / static_cast<float>(whole.subtex->width)) * u_range;
+        subtexture.top = whole.subtex->top
+            + (tile_y * icon_tile_size / static_cast<float>(whole.subtex->height)) * v_range;
+        subtexture.bottom = whole.subtex->top
+            + ((tile_y + 1) * icon_tile_size / static_cast<float>(whole.subtex->height)) * v_range;
+    }
 
-    C2D_Image image = whole;
+    C2D_Image image = C2D_SpriteSheetGetImage(
+        sheets_[image_sheet_index], 0);
     image.subtex = &subtexture;
-    C2D_DrawImageAt(image, x, y, depth, NULL, scale, scale);
+    if (map_textures_filtered_) {
+        C2D_Flush();
+        C3D_TexSetFilter(image.tex, GPU_NEAREST, GPU_NEAREST);
+        C3D_TexBind(0, image.tex);
+    }
+    C2D_DrawImageAt(image, x, y, depth, NULL, image_scale, image_scale);
+    if (map_textures_filtered_) {
+        C2D_Flush();
+        C3D_TexSetFilter(image.tex, GPU_LINEAR, GPU_LINEAR);
+        C3D_TexBind(0, image.tex);
+    }
 }
 
 void MapRenderer::draw_selected_combat_target_icon(float x, float y,
@@ -2996,6 +3367,17 @@ void MapRenderer::draw(int screen_width, int screen_height,
     float scaling_factor) const
 {
     if (!initialized_) return;
+    const bool filter_map = scaling_factor != 1.0f
+        && scaling_factor != 0.75f;
+    if (filter_map != map_textures_filtered_) {
+        for (C2D_SpriteSheet sheet : sheets_) {
+            const C2D_Image image = C2D_SpriteSheetGetImage(sheet, 0);
+            const GPU_TEXTURE_FILTER_PARAM filter =
+                filter_map ? GPU_LINEAR : GPU_NEAREST;
+            C3D_TexSetFilter(image.tex, filter, filter);
+        }
+        map_textures_filtered_ = filter_map;
+    }
     const map::ViewTransform view = map::camera_for_player(
         document_, player_, screen_width, screen_height, scaling_factor
     );
@@ -3022,9 +3404,9 @@ void MapRenderer::draw(int screen_width, int screen_height,
     }
     map::GridPosition player_screen;
     if (map::map_to_screen(view, player_, player_screen)) {
-        C2D_DrawImageAt(player_image_, static_cast<float>(player_screen.x),
-            static_cast<float>(player_screen.y), 0.5f, NULL,
-            tile_scale, tile_scale);
+        draw_actor_icon_at("char_hero.png", 0,
+            static_cast<float>(player_screen.x),
+            static_cast<float>(player_screen.y), 0.5f, tile_scale);
     }
 
     draw_layer("above", view, 0.5f, tile_scale);

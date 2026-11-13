@@ -334,7 +334,9 @@ bool parse_requirement(
         requirement.id = property->value;
     }
     if (const Property *property = find_property(object.properties, "requireValue")) {
-        if (!parse_integer(property->value, 0, requirement.value)) {
+        const int minimum = requirement.type == "factionScore"
+                || requirement.type == "factionScoreEquals" ? INT_MIN : 0;
+        if (!parse_integer(property->value, minimum, requirement.value)) {
             if (error != NULL) *error = "invalid requireValue on map object " + object.name;
             return false;
         }

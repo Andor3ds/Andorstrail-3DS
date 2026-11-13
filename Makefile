@@ -107,7 +107,7 @@ MAP_ROMFS_FILES := $(wildcard $(PROJECT_ROOT)/$(ROMFS)/maps/*.tmx) \
 MAP_T3X_FILES := $(patsubst $(PROJECT_ROOT)/assets/map/home/%.png,$(PROJECT_ROOT)/$(ROMFS)/gfx/%.t3x,$(wildcard $(PROJECT_ROOT)/assets/map/home/*.png))
 UI_T3X_FILES := $(patsubst $(PROJECT_ROOT)/assets/ui/%.png,$(PROJECT_ROOT)/$(ROMFS)/gfx/ui/%.t3x,$(wildcard $(PROJECT_ROOT)/assets/ui/*.png))
 TITLE_T3X_FILES := $(patsubst $(PROJECT_ROOT)/assets/title/%.png,$(PROJECT_ROOT)/$(ROMFS)/gfx/title/%.t3x,$(wildcard $(PROJECT_ROOT)/assets/title/*.png))
-$(OUTPUT).3dsx: $(OUTPUT).elf $(OUTPUT).smdh $(PROJECT_ROOT)/$(ROMFS)/game_data.pack $(MAP_ROMFS_FILES) $(PROJECT_ROOT)/$(ROMFS)/gfx/tilesets.list $(MAP_T3X_FILES) $(PROJECT_ROOT)/$(ROMFS)/gfx/ui/ui.list $(UI_T3X_FILES) $(PROJECT_ROOT)/$(ROMFS)/gfx/title/title.list $(TITLE_T3X_FILES)
+$(OUTPUT).3dsx: $(OUTPUT).elf $(OUTPUT).smdh $(PROJECT_ROOT)/$(ROMFS)/game_data.pack $(MAP_ROMFS_FILES) $(PROJECT_ROOT)/$(ROMFS)/gfx/tilesets.list $(PROJECT_ROOT)/$(ROMFS)/gfx/actor_icons.list $(MAP_T3X_FILES) $(PROJECT_ROOT)/$(ROMFS)/gfx/ui/ui.list $(UI_T3X_FILES) $(PROJECT_ROOT)/$(ROMFS)/gfx/title/title.list $(TITLE_T3X_FILES)
 $(OUTPUT).elf: $(OFILES)
 $(PROJECT_ROOT)/$(ROMFS)/gfx/%.t3x: $(PROJECT_ROOT)/assets/map/home/%.png
 	@mkdir -p $(dir $@)

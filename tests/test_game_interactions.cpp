@@ -232,6 +232,51 @@ static void test_mikhail_quests(GameResources *resources)
     GameCore core;
     game_core_init(&core);
     std::string error;
+    andortrail::dialogue::Conversation terminal_conversation(resources, &core);
+    assert(terminal_conversation.start("F", error));
+    assert(!terminal_conversation.active());
+    assert(terminal_conversation.terminal_action()
+        == andortrail::dialogue::Conversation::TerminalActionAttack);
+    terminal_conversation.close();
+    assert(terminal_conversation.terminal_action()
+        == andortrail::dialogue::Conversation::TerminalActionNone);
+
+    andortrail::dialogue::Conversation attack_conversation(resources, &core);
+    if (!attack_conversation.start("anona_fight", error)) {
+        std::cerr << "Attack conversation failed to start: " << error << "\n";
+        assert(false);
+    }
+    assert(attack_conversation.active());
+    assert(attack_conversation.replies().size() == 1);
+    assert(attack_conversation.choose(0, error));
+    assert(!attack_conversation.active());
+    assert(attack_conversation.terminal_action()
+        == andortrail::dialogue::Conversation::TerminalActionAttack);
+
+    andortrail::dialogue::Conversation routed_attack(resources, &core);
+    if (!routed_attack.start("algangror_fight_5", error)) {
+        std::cerr << "Routed attack conversation failed to start: " << error << "\n";
+        assert(false);
+    }
+    assert(routed_attack.active());
+    assert(routed_attack.choose(0, error));
+    assert(!routed_attack.active());
+    assert(routed_attack.terminal_action()
+        == andortrail::dialogue::Conversation::TerminalActionAttack);
+
+    andortrail::dialogue::Conversation spawn_script(resources, &core);
+    assert(spawn_script.start("aidem_base_fight", error));
+    const std::vector<andortrail::dialogue::SpawnAreaEffect> spawn_effects =
+        spawn_script.take_spawn_area_effects();
+    assert(spawn_effects.size() == 5);
+    assert(spawn_effects[0].area_id == "aidem_base_thieves");
+    assert(!spawn_effects[0].active && !spawn_effects[0].spawn_all
+        && spawn_effects[0].remove_all);
+    for (std::size_t index = 1; index < spawn_effects.size(); ++index) {
+        assert(spawn_effects[index].active && spawn_effects[index].spawn_all
+            && !spawn_effects[index].remove_all);
+    }
+
     GameCore starter_core;
     game_core_init(&starter_core);
     assert(andortrail::items::apply_drop_list(resources, &starter_core, "startitems", error));

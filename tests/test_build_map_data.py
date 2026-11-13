@@ -18,6 +18,23 @@ from tools.build_map_data import (
     copy_title_assets,
 )
 
+def _png(width, height, color=(12, 34, 56, 255)):
+    def chunk(name, content):
+        body = name + content
+        return (
+            struct.pack(">I", len(content)) + body
+            + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+        )
+
+    row = bytes(color) * width
+    pixels = b"".join(b"\0" + row for _ in range(height))
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(pixels))
+        + chunk(b"IEND", b"")
+    )
+
 
 class MapDataBuilderTests(unittest.TestCase):
     def test_hud_image_order_matches_bundled_ui_assets(self):
@@ -170,15 +187,18 @@ class MapDataBuilderTests(unittest.TestCase):
                 if image_name not in required_images:
                     required_images.append(image_name)
         gfx_list = (project / "romfs" / "gfx" / "tilesets.list").read_text(encoding="ascii").splitlines()
-        self.assertEqual(gfx_list[:len(required_images) + 1],
-            required_images + ["char_hero.png"])
-        actor_sheets = set(gfx_list[len(required_images) + 1:])
-        self.assertTrue(set(ACTOR_SPRITE_SHEETS).issubset(actor_sheets))
+        atlas_names = {
+            "actor_atlas_050.png", "actor_atlas_075.png", "actor_atlas_100.png"
+        }
+        self.assertEqual(
+            gfx_list,
+            required_images + ["char_hero.png"] + sorted(atlas_names),
+        )
         self.assertEqual(len(gfx_list), len(set(gfx_list)))
         for image_name in gfx_list:
             image = project / "assets" / "map" / "home" / image_name
             self.assertTrue(image.is_file(), image_name)
-            if image_name in actor_sheets:
+            if image_name in atlas_names:
                 png_header = image.read_bytes()[:24]
                 self.assertEqual(png_header[:8], b"\x89PNG\r\n\x1a\n")
             elif image_name != "char_hero.png":
@@ -219,10 +239,16 @@ class MapDataBuilderTests(unittest.TestCase):
             )
             (drawable / "ground.png").write_bytes(b"original-ground-png")
             (drawable / "replacement.png").write_bytes(b"replacement-only-png")
-            (drawable / "char_hero.png").write_bytes(b"original-player-png")
+            (drawable / "char_hero.png").write_bytes(_png(32, 32))
             for name in ACTOR_SPRITE_SHEETS:
                 (drawable / name).write_bytes(f"original-{name}".encode("ascii"))
             (drawable / "monsters_insects.png").write_bytes(b"original-insects")
+            for name, image in (
+                ("monsters_mage2.png", _png(32, 32)),
+                ("monsters_men.png", _png(256, 32)),
+                ("monsters_insects.png", _png(64, 32)),
+            ):
+                (drawable / name).write_bytes(image)
             actor_directory = root / "project" / "assets" / "map" / "home"
             actor_directory.mkdir(parents=True)
 
@@ -242,31 +268,42 @@ class MapDataBuilderTests(unittest.TestCase):
             count, byte_count = copy_map_render_assets(source, root / "project", ("home",))
 
             asset_directory = root / "project" / "assets" / "map" / "home"
-            self.assertEqual(count, 3 + len(ACTOR_SPRITE_SHEETS))
+            self.assertEqual(count, 3 + len(ACTOR_SPRITE_SHEETS) + 3)
             self.assertEqual(
                 byte_count,
-                len(b"original-ground-png") + len(b"original-player-png")
-                + sum(len(f"original-{name}".encode("ascii")) for name in ACTOR_SPRITE_SHEETS)
-                + len(b"original-insects"),
+                sum(path.stat().st_size for path in asset_directory.iterdir())
+                + (root / "project" / "romfs" / "gfx" / "actor_icons.list").stat().st_size,
             )
             self.assertEqual((asset_directory / "ground.png").read_bytes(), b"original-ground-png")
-            self.assertEqual((asset_directory / "char_hero.png").read_bytes(), b"original-player-png")
+            self.assertEqual((asset_directory / "char_hero.png").read_bytes(), _png(32, 32))
             self.assertFalse((asset_directory / "replacement.png").exists())
             gfx_list = (root / "project" / "romfs" / "gfx" / "tilesets.list").read_text(encoding="ascii")
             self.assertEqual(
                 gfx_list,
                 "ground.png\nchar_hero.png\n"
-                + "".join(f"{name}\n" for name in ACTOR_SPRITE_SHEETS)
-                + "monsters_insects.png\n",
+                + "actor_atlas_050.png\nactor_atlas_075.png\n"
+                + "actor_atlas_100.png\n",
             )
             for name in ACTOR_SPRITE_SHEETS:
                 self.assertEqual(
                     (asset_directory / name).read_bytes(),
-                    f"original-{name}".encode("ascii"),
+                    _png(32, 32) if name == "monsters_mage2.png"
+                    else _png(256, 32) if name == "monsters_men.png"
+                    else f"original-{name}".encode("ascii"),
                 )
             self.assertEqual(
                 (asset_directory / "monsters_insects.png").read_bytes(),
-                b"original-insects",
+                _png(64, 32),
+            )
+            icons = (root / "project" / "romfs" / "gfx" / "actor_icons.list")
+            self.assertEqual(
+                icons.read_text(encoding="ascii").splitlines(),
+                [
+                    "char_hero.png 0 0",
+                    "monsters_mage2.png 0 1",
+                    "monsters_men.png 7 2",
+                    "monsters_insects.png 1 3",
+                ],
             )
 
     def test_actor_icon_sheets_follow_spawn_group_records(self):
@@ -286,6 +323,10 @@ class MapDataBuilderTests(unittest.TestCase):
                 '{"id":"wasp","spawnGroup":"wasps","iconID":"monsters_insects:1"}]',
                 encoding="utf-8",
             )
+            drawable = source / "res" / "drawable"
+            drawable.mkdir()
+            (drawable / "monsters_mage2.png").write_bytes(_png(32, 32))
+            (drawable / "monsters_men.png").write_bytes(_png(256, 32))
             (source / "res" / "xml" / "home.tmx").write_text(
                 '<map><objectgroup><object name="wasp_area"><properties>'
                 '<property name="spawngroup" value="wasps"/>'
@@ -316,8 +357,10 @@ class MapDataBuilderTests(unittest.TestCase):
             )
             for name in ACTOR_SPRITE_SHEETS:
                 (drawable / name).write_bytes(f"original-{name}".encode("ascii"))
+            (drawable / "monsters_mage2.png").write_bytes(_png(32, 32))
+            (drawable / "monsters_men.png").write_bytes(_png(256, 32))
             (drawable / "old_tiles.png").write_bytes(b"old tiles")
-            (drawable / "char_hero.png").write_bytes(b"hero")
+            (drawable / "char_hero.png").write_bytes(_png(32, 32))
             actor_directory = root / "project" / "assets" / "map" / "home"
             actor_directory.mkdir(parents=True)
             for name in ACTOR_SPRITE_SHEETS:
@@ -331,7 +374,7 @@ class MapDataBuilderTests(unittest.TestCase):
 
             count, _ = copy_map_render_assets(source, root / "project", ("wild1",))
 
-            self.assertEqual(count, 2 + len(ACTOR_SPRITE_SHEETS))
+            self.assertEqual(count, 2 + len(ACTOR_SPRITE_SHEETS) + 3)
             self.assertTrue((root / "project/assets/map/home/old_tiles.png").is_file())
 
     def test_copies_only_configured_maps_and_worldmap(self):

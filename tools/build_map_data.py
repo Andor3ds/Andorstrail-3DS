@@ -13,6 +13,11 @@ import xml.etree.ElementTree as ET
 import zlib
 from pathlib import Path
 
+if __package__:
+    from .pixel_sprite_downsample import build_actor_atlases
+else:
+    from pixel_sprite_downsample import build_actor_atlases
+
 RENDER_MAPS = ("home", "crossglen", "crossglen_hall", "wild1")
 RENDERED_LAYERS = {"base", "ground", "objects", "above", "top"}
 ANDROID_GID_FLAGS = 0xF0000000
@@ -126,10 +131,10 @@ def _layer_gids(layer: ET.Element, width: int, height: int) -> tuple[int, ...]:
         raise ValueError(f"TMX layer {layer.get('name')} has {len(decoded)} bytes, expected {expected_size}")
     return struct.unpack(f"<{width * height}I", decoded)
 
-def actor_icon_sheets(
+def actor_icon_entries(
     source_root: Path,
     map_names: tuple[str, ...],
-) -> tuple[str, ...]:
+) -> tuple[tuple[str, int], ...]:
     resource_list = source_root / "res" / "values" / "loadresources.xml"
     raw_directory = source_root / "res" / "raw"
     arrays = ET.parse(resource_list).getroot()
@@ -160,7 +165,11 @@ def actor_icon_sheets(
             if isinstance(group, str):
                 monsters_by_group.setdefault(group.lower(), []).append(monster)
 
-    sheets = list(ACTOR_SPRITE_SHEETS)
+    icons = [
+        ("char_hero.png", 0),
+        ("monsters_mage2.png", 0),
+        ("monsters_men.png", 7),
+    ]
     xml_root = source_root / "res" / "xml"
     for map_name in map_names:
         root = ET.parse(xml_root / f"{map_name}.tmx").getroot()
@@ -182,9 +191,22 @@ def actor_icon_sheets(
                     icon_id = monster.get("iconID")
                     if not isinstance(icon_id, str) or ":" not in icon_id:
                         continue
-                    sheet = icon_id.rsplit(":", 1)[0] + ".png"
-                    if sheet not in sheets:
-                        sheets.append(sheet)
+                    sheet, raw_index = icon_id.rsplit(":", 1)
+                    if raw_index.isdigit():
+                        icon = (sheet + ".png", int(raw_index))
+                        if icon not in icons:
+                            icons.append(icon)
+    return tuple(icons)
+
+
+def actor_icon_sheets(
+    source_root: Path,
+    map_names: tuple[str, ...],
+) -> tuple[str, ...]:
+    sheets = list(ACTOR_SPRITE_SHEETS)
+    for sheet_name, _ in actor_icon_entries(source_root, map_names):
+        if sheet_name != "char_hero.png" and sheet_name not in sheets:
+            sheets.append(sheet_name)
     return tuple(sheets)
 
 
@@ -262,6 +284,7 @@ def copy_map_render_assets(
     asset_directory = project_root / "assets" / "map" / "home"
     source_path_by_name[hero_path.name] = hero_path
     actor_sheets = actor_icon_sheets(source_root, map_names)
+    actor_icons = actor_icon_entries(source_root, map_names)
     for name in actor_sheets:
         actor_path = android_res / "drawable" / name
         if not actor_path.is_file():
@@ -280,11 +303,23 @@ def copy_map_render_assets(
         if source_path.resolve() != target_path.resolve():
             shutil.copyfile(source_path, target_path)
 
-    (gfx_directory / "tilesets.list").write_text(
-        "".join(f"{name}\n" for name in source_names), encoding="ascii"
+    icon_count, icon_bytes = build_actor_atlases(
+        asset_directory, actor_icons, asset_directory,
+        gfx_directory / "actor_icons.list",
     )
-    byte_count = sum(source_path_by_name[name].stat().st_size for name in source_names)
-    return len(source_names), byte_count
+    atlas_names = (
+        "actor_atlas_050.png", "actor_atlas_075.png",
+        "actor_atlas_100.png",
+    )
+    runtime_names = list(dict.fromkeys(used_images + [hero_path.name]))
+    runtime_names.extend(atlas_names)
+    (gfx_directory / "tilesets.list").write_text(
+        "".join(f"{name}\n" for name in runtime_names), encoding="ascii"
+    )
+    byte_count = sum(source_path_by_name[name].stat().st_size
+        for name in source_path_by_name)
+    byte_count += icon_bytes
+    return len(source_names) + len(atlas_names), byte_count
 
 
 def validate_ui_assets(source_root: Path, project_root: Path) -> None:

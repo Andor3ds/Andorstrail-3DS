@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace andortrail {
@@ -77,6 +78,8 @@ private:
         std::string monster_id;
         std::string drop_list_id;
         std::string name;
+        std::string phrase_id;
+        std::string faction_id;
         std::string icon_sheet;
         std::string instance_id;
         map::Rect spawn_area;
@@ -95,6 +98,7 @@ private:
         std::vector<combat::ConditionState> conditions;
         bool critical_immune;
         bool ignore_areas;
+        bool force_aggressive;
         bool aggressive;
         bool unique;
         bool has_destination;
@@ -112,6 +116,9 @@ private:
         std::string &error);
     bool interact_with_mikhail();
     bool interact_with_mara();
+    bool interact_with_enemy(EnemyState &enemy);
+    bool handle_conversation_terminal(std::string &error);
+    bool apply_conversation_spawn_effects(std::string &error);
     bool transition(const map::Event &event, map::GridPosition entered,
         std::string &error);
     void show_sign(const map::Event &event);
@@ -122,6 +129,7 @@ private:
     bool initialize_enemy(const map::SpawnArea &area, int spawn_index,
         const map::GridPosition &position, const GameResourceRecordEntry *record,
         EnemyState &enemy);
+    void refresh_enemy_aggressiveness();
     bool respawn_enemy(std::size_t area_index, std::string &error);
     bool update_spawn_areas(std::uint64_t current_time_ms, std::string &error);
     bool persist_enemy_conditions(const EnemyState &enemy, std::string &error);
@@ -170,6 +178,7 @@ private:
     map::GridPosition player_;
     std::string maps_directory_;
     std::string interaction_message_;
+    std::string conversation_enemy_instance_id_;
     GameResources *resources_;
     GameCore *core_;
     dialogue::Conversation conversation_;
@@ -178,13 +187,19 @@ private:
     std::vector<std::string> image_names_;
     std::map<std::string, std::size_t> image_indices_;
     std::map<std::string, std::vector<Tex3DS_SubTexture> > tile_subtextures_;
+    std::map<std::pair<std::string, std::uint32_t>, std::uint32_t>
+        actor_icon_slots_;
     C2D_Image player_image_;
+    mutable bool map_textures_filtered_;
     bool modal_interaction_;
     bool shop_interaction_;
     bool initialized_;
     std::vector<EnemyState> enemies_;
     std::string selected_enemy_instance_id_;
     std::vector<std::vector<const GameResourceRecordEntry *> > spawn_candidates_;
+    std::vector<bool> spawn_area_active_;
+    std::vector<bool> spawn_area_remove_all_pending_;
+    std::vector<bool> spawn_area_spawn_all_pending_;
     std::vector<bool> spawn_area_unique_;
     std::vector<bool> spawn_area_has_npc_;
     int player_action_points_;
@@ -205,7 +220,6 @@ private:
     std::string declined_enemy_instance_id_;
     std::string active_combat_enemy_id_;
     std::uint64_t next_combat_enemy_action_ms_;
-    std::size_t combat_enemy_actions_;
     std::uint64_t next_respawn_check_ms_;
     std::uint64_t last_round_update_ms_;
     std::uint64_t round_tick_accumulator_ms_;

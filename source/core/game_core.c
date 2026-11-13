@@ -70,6 +70,28 @@ static int get_value(const GameCoreValue *values, size_t count, const char *id)
     return 0;
 }
 
+static int java_int_wrap(int64_t value)
+{
+    const uint32_t bits = (uint32_t)(uint64_t)value;
+    if (bits <= INT_MAX) return (int)bits;
+    return -1 - (int)(UINT32_MAX - bits);
+}
+
+static bool set_alignment_value(GameCore *core, const char *id, int alignment)
+{
+    if (!valid_id(id)) return false;
+    GameCoreValue *entry = find_value(core->alignments, core->alignment_count, id);
+    if (entry != NULL) {
+        entry->value = alignment;
+        return true;
+    }
+    if (core->alignment_count >= GAME_CORE_MAX_VALUES) return false;
+    entry = &core->alignments[core->alignment_count++];
+    strcpy(entry->id, id);
+    entry->value = alignment;
+    return true;
+}
+
 static bool line_finished(const char *line, int parsed_length)
 {
     if (parsed_length < 0) return false;
@@ -112,6 +134,26 @@ bool game_core_set_quest_progress(GameCore *core, const char *id, int progress)
 {
     if (core == NULL) return false;
     return set_value(core->quests, &core->quest_count, id, progress);
+}
+
+int game_core_alignment(const GameCore *core, const char *id)
+{
+    if (core == NULL || !valid_id(id)) return 0;
+    return get_value(core->alignments, core->alignment_count, id);
+}
+
+bool game_core_set_alignment(GameCore *core, const char *id, int alignment)
+{
+    if (core == NULL) return false;
+    return set_alignment_value(core, id, alignment);
+}
+
+bool game_core_add_alignment(GameCore *core, const char *id, int delta)
+{
+    if (core == NULL || !valid_id(id)) return false;
+    const int current = game_core_alignment(core, id);
+    return set_alignment_value(core, id,
+        java_int_wrap((int64_t)current + (int64_t)delta));
 }
 
 int game_core_skill_level(const GameCore *core, const char *id)
@@ -419,6 +461,68 @@ bool game_core_get_map_state(const GameCore *core, const char *map_id,
     return false;
 }
 
+bool game_core_set_spawn_area_active(GameCore *core, const char *map_id,
+    const char *area_id, bool active)
+{
+    return game_core_set_spawn_area_state(core, map_id, area_id, active,
+        false, false);
+}
+
+bool game_core_set_spawn_area_state(GameCore *core, const char *map_id,
+    const char *area_id, bool active, bool remove_all, bool spawn_all)
+{
+    if (core == NULL || !valid_id(map_id) || !valid_id(area_id)
+            || core->spawn_area_state_count > GAME_CORE_MAX_SPAWN_AREA_STATES) {
+        return false;
+    }
+    for (size_t index = 0; index < core->spawn_area_state_count; ++index) {
+        GameCoreSpawnAreaState *state = &core->spawn_area_states[index];
+        if (strcmp(state->map_id, map_id) != 0
+                || strcmp(state->area_id, area_id) != 0) continue;
+        state->active = active;
+        state->remove_all = remove_all;
+        state->spawn_all = spawn_all;
+        return true;
+    }
+    if (core->spawn_area_state_count >= GAME_CORE_MAX_SPAWN_AREA_STATES) {
+        return false;
+    }
+    GameCoreSpawnAreaState *state =
+        &core->spawn_area_states[core->spawn_area_state_count++];
+    strcpy(state->map_id, map_id);
+    strcpy(state->area_id, area_id);
+    state->active = active;
+    state->remove_all = remove_all;
+    state->spawn_all = spawn_all;
+    return true;
+}
+
+bool game_core_get_spawn_area_active(const GameCore *core, const char *map_id,
+    const char *area_id, bool *active)
+{
+    return game_core_get_spawn_area_state(core, map_id, area_id, active,
+        NULL, NULL);
+}
+
+bool game_core_get_spawn_area_state(const GameCore *core, const char *map_id,
+    const char *area_id, bool *active, bool *remove_all, bool *spawn_all)
+{
+    if (core == NULL || !valid_id(map_id) || !valid_id(area_id)
+            || core->spawn_area_state_count > GAME_CORE_MAX_SPAWN_AREA_STATES) {
+        return false;
+    }
+    for (size_t index = 0; index < core->spawn_area_state_count; ++index) {
+        const GameCoreSpawnAreaState *state = &core->spawn_area_states[index];
+        if (strcmp(state->map_id, map_id) != 0
+                || strcmp(state->area_id, area_id) != 0) continue;
+        if (active != NULL) *active = state->active;
+        if (remove_all != NULL) *remove_all = state->remove_all;
+        if (spawn_all != NULL) *spawn_all = state->spawn_all;
+        return true;
+    }
+    return false;
+}
+
 bool game_core_set_map_enemies(GameCore *core, const char *map_id,
     const GameCoreSavedEnemy *enemies, size_t count)
 {
@@ -482,6 +586,7 @@ size_t game_core_get_map_enemies(const GameCore *core, const char *map_id,
 bool game_core_reset_map_encounters(GameCore *core)
 {
     if (core == NULL || core->map_state_count > GAME_CORE_MAX_MAP_STATES
+            || core->spawn_area_state_count > GAME_CORE_MAX_SPAWN_AREA_STATES
             || core->saved_enemy_count > GAME_CORE_MAX_SAVED_ENEMIES
             || core->enemy_condition_count > GAME_CORE_MAX_ENEMY_CONDITIONS) {
         return false;
@@ -518,6 +623,7 @@ bool game_core_reset_map_encounters_for_map(GameCore *core, const char *map_id)
 {
     if (core == NULL || !valid_id(map_id)
             || core->map_state_count > GAME_CORE_MAX_MAP_STATES
+            || core->spawn_area_state_count > GAME_CORE_MAX_SPAWN_AREA_STATES
             || core->saved_enemy_count > GAME_CORE_MAX_SAVED_ENEMIES
             || core->enemy_condition_count > GAME_CORE_MAX_ENEMY_CONDITIONS) {
         return false;
@@ -693,9 +799,11 @@ bool game_core_save(const GameCore *core, const char *path)
             || core->condition_count > GAME_CORE_MAX_CONDITIONS
             || core->enemy_condition_count > GAME_CORE_MAX_ENEMY_CONDITIONS
             || core->map_state_count > GAME_CORE_MAX_MAP_STATES
+            || core->spawn_area_state_count > GAME_CORE_MAX_SPAWN_AREA_STATES
             || core->saved_enemy_count > GAME_CORE_MAX_SAVED_ENEMIES
             || core->inventory_count > GAME_CORE_MAX_VALUES
-            || core->skill_count > GAME_CORE_MAX_VALUES) return false;
+            || core->skill_count > GAME_CORE_MAX_VALUES
+            || core->alignment_count > GAME_CORE_MAX_VALUES) return false;
     if (core->current_map_id[0] != '\0'
             && (!valid_id(core->current_map_id) || core->current_map_x < 0
                 || core->current_map_y < 0)) return false;
@@ -736,7 +844,7 @@ bool game_core_save(const GameCore *core, const char *path)
         return false;
     }
     bool valid = fprintf(file,
-        "ANDORTRAIL_SAVE 10\ngold %d\nhealth %d\nmax_health %d\nlevel %d\n"
+        "ANDORTRAIL_SAVE 13\ngold %d\nhealth %d\nmax_health %d\nlevel %d\n"
         "experience %d\nattack_chance %d\nattack_damage %d\nblock_chance %d\n"
         "critical_skill %d\ncritical_multiplier %.9g\n"
         "skill_points %d\nrandom %" PRIu32 "\nenemy_spawn_sequence %" PRIu32 "\n",
@@ -792,16 +900,24 @@ bool game_core_save(const GameCore *core, const char *path)
             && fprintf(file, "map_state %s %" PRIu64 " %d\n", state->id,
                 state->last_visit_time_ms, state->visited ? 1 : 0) >= 0;
     }
+    for (size_t index = 0; valid && index < core->spawn_area_state_count; ++index) {
+        const GameCoreSpawnAreaState *state = &core->spawn_area_states[index];
+        valid = valid_id(state->map_id) && valid_id(state->area_id)
+            && fprintf(file, "spawn_area %s %s %d %d %d\n", state->map_id,
+                state->area_id, state->active ? 1 : 0,
+                state->remove_all ? 1 : 0, state->spawn_all ? 1 : 0) >= 0;
+    }
     for (size_t index = 0; valid && index < core->saved_enemy_count; ++index) {
         const GameCoreSavedEnemy *enemy = &core->saved_enemies[index];
         valid = valid_id(enemy->map_id) && valid_id(enemy->instance_id)
             && valid_id(enemy->monster_id) && enemy->spawn_area_index >= 0
             && enemy->x >= 0 && enemy->y >= 0 && enemy->health > 0
             && enemy->action_points >= 0
-            && fprintf(file, "map_enemy %s %s %s %d %d %d %d %d %d\n",
+            && fprintf(file, "map_enemy %s %s %s %d %d %d %d %d %d %d\n",
                 enemy->map_id, enemy->instance_id, enemy->monster_id,
                 enemy->spawn_area_index, enemy->x, enemy->y, enemy->health,
-                enemy->action_points, enemy->unique ? 1 : 0) >= 0;
+                enemy->action_points, enemy->unique ? 1 : 0,
+                enemy->force_aggressive ? 1 : 0) >= 0;
     }
     for (size_t index = 0; valid && index < core->inventory_count; ++index) {
         valid = valid_id(core->inventory[index].id) && core->inventory[index].value > 0
@@ -812,6 +928,11 @@ bool game_core_save(const GameCore *core, const char *path)
         valid = valid_id(core->skills[index].id) && core->skills[index].value > 0
             && fprintf(file, "skill %s %d\n", core->skills[index].id,
                 core->skills[index].value) >= 0;
+    }
+    for (size_t index = 0; valid && index < core->alignment_count; ++index) {
+        valid = valid_id(core->alignments[index].id)
+            && fprintf(file, "alignment %s %d\n", core->alignments[index].id,
+                core->alignments[index].value) >= 0;
     }
     if (fclose(file) != 0) valid = false;
     if (valid) {
@@ -876,6 +997,12 @@ GameCoreLoadResult game_core_load(GameCore *core, const char *path)
         version = 9;
     } else if (valid && strcmp(line, "ANDORTRAIL_SAVE 10\n") == 0) {
         version = 10;
+    } else if (valid && strcmp(line, "ANDORTRAIL_SAVE 11\n") == 0) {
+        version = 11;
+    } else if (valid && strcmp(line, "ANDORTRAIL_SAVE 12\n") == 0) {
+        version = 12;
+    } else if (valid && strcmp(line, "ANDORTRAIL_SAVE 13\n") == 0) {
+        version = 13;
     } else {
         valid = false;
     }
@@ -909,18 +1036,36 @@ GameCoreLoadResult game_core_load(GameCore *core, const char *path)
         char slot_name[GAME_CORE_ID_CAPACITY];
         char item_id[GAME_CORE_ID_CAPACITY];
         char map_id[GAME_CORE_ID_CAPACITY];
+        char area_id[GAME_CORE_ID_CAPACITY];
         char enemy_id[GAME_CORE_ID_CAPACITY];
         char condition_id[GAME_CORE_ID_CAPACITY];
         size_t quickslot_index = 0;
         uint32_t enemy_spawn_sequence = 0;
         uint64_t last_visit_time_ms = 0;
         int visited_value = 0;
+        int active_value = 0;
+        int remove_all_value = 0;
+        int spawn_all_value = 0;
         int spawn_area_index = 0;
         int x = 0;
         int y = 0;
         int health_value = 0;
         int action_points = 0;
         int unique_value = 0;
+        int force_aggressive_value = 0;
+        int map_enemy_parsed_length = -1;
+        int map_enemy_fields = sscanf(line,
+            "map_enemy %63s %63s %63s %d %d %d %d %d %d %d%n",
+            map_id, enemy_id, condition_id, &spawn_area_index, &x, &y,
+            &health_value, &action_points, &unique_value,
+            &force_aggressive_value, &map_enemy_parsed_length);
+        if (map_enemy_fields == 9) {
+            map_enemy_fields = sscanf(line,
+                "map_enemy %63s %63s %63s %d %d %d %d %d %d%n",
+                map_id, enemy_id, condition_id, &spawn_area_index, &x, &y,
+                &health_value, &action_points, &unique_value, &parsed_length);
+            map_enemy_parsed_length = parsed_length;
+        }
         if (sscanf(line, "gold %d%n", &value, &parsed_length) == 1
                 && line_finished(line, parsed_length)) {
             if (gold_seen || value < 0) valid = false;
@@ -1034,15 +1179,29 @@ GameCoreLoadResult game_core_load(GameCore *core, const char *path)
             if (game_core_get_map_state(&loaded, map_id, NULL, NULL)
                     || !game_core_set_map_state(&loaded, map_id,
                     last_visit_time_ms, visited_value != 0)) valid = false;
-        } else if (sscanf(line, "map_enemy %63s %63s %63s %d %d %d %d %d %d%n",
-                    map_id, enemy_id, condition_id, &spawn_area_index, &x, &y,
-                    &health_value, &action_points, &unique_value,
-                    &parsed_length) == 9
-                && line_finished(line, parsed_length) && version >= 10
+        } else if (sscanf(line, "spawn_area %63s %63s %d %d %d%n", map_id,
+                    area_id, &active_value, &remove_all_value,
+                    &spawn_all_value, &parsed_length) == 5
+                && line_finished(line, parsed_length) && version >= 13
+                && valid_id(map_id) && valid_id(area_id)
+                && (active_value == 0 || active_value == 1)
+                && (remove_all_value == 0 || remove_all_value == 1)
+                && (spawn_all_value == 0 || spawn_all_value == 1)
+                && loaded.spawn_area_state_count
+                    < GAME_CORE_MAX_SPAWN_AREA_STATES) {
+            if (game_core_get_spawn_area_active(&loaded, map_id, area_id, NULL)
+                    || !game_core_set_spawn_area_state(&loaded, map_id,
+                        area_id, active_value != 0, remove_all_value != 0,
+                        spawn_all_value != 0)) valid = false;
+        } else if (((version >= 12 && map_enemy_fields == 10)
+                    || (version >= 10 && version < 12
+                        && map_enemy_fields == 9))
+                && line_finished(line, map_enemy_parsed_length)
                 && valid_id(map_id) && valid_id(enemy_id)
                 && valid_id(condition_id) && spawn_area_index >= 0
                 && x >= 0 && y >= 0 && health_value > 0 && action_points >= 0
                 && (unique_value == 0 || unique_value == 1)
+                && (force_aggressive_value == 0 || force_aggressive_value == 1)
                 && loaded.saved_enemy_count < GAME_CORE_MAX_SAVED_ENEMIES) {
             for (size_t index = 0; index < loaded.saved_enemy_count; ++index) {
                 if (strcmp(loaded.saved_enemies[index].map_id, map_id) == 0
@@ -1061,6 +1220,7 @@ GameCoreLoadResult game_core_load(GameCore *core, const char *path)
             saved->health = health_value;
             saved->action_points = action_points;
             saved->unique = unique_value != 0;
+            saved->force_aggressive = force_aggressive_value != 0;
         } else if (sscanf(line, "quest %63s %d%n", id, &value, &parsed_length) == 2
                 && line_finished(line, parsed_length) && valid_id(id) && value > 0) {
             if (find_value(loaded.quests, loaded.quest_count, id) != NULL
@@ -1075,6 +1235,12 @@ GameCoreLoadResult game_core_load(GameCore *core, const char *path)
             if (version < 4
                     || find_value(loaded.skills, loaded.skill_count, id) != NULL
                     || !set_value(loaded.skills, &loaded.skill_count, id, value)) valid = false;
+        } else if (sscanf(line, "alignment %63s %d%n", id, &value,
+                    &parsed_length) == 2
+                && line_finished(line, parsed_length) && version >= 11
+                && valid_id(id) && loaded.alignment_count < GAME_CORE_MAX_VALUES) {
+            if (find_value(loaded.alignments, loaded.alignment_count, id) != NULL
+                    || !set_alignment_value(&loaded, id, value)) valid = false;
         } else if (sscanf(line, "equip %63s %63s%n", slot_name, item_id,
                     &parsed_length) == 2 && line_finished(line, parsed_length)
                 && version >= 6 && valid_id(item_id)) {

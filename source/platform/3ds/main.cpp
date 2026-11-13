@@ -33,10 +33,9 @@ struct Preferences {
     int scaling_factor_index;
 };
 
-const float SCALE_FACTORS[] = {0.5f, 0.75f, 1.0f, 1.5f, 2.0f};
+const float SCALE_FACTORS[] = {0.75f, 1.0f};
 const char *const SCALE_FACTOR_LABELS[] = {
-    "Map zoom 0.5x", "Map zoom 0.75x", "Map zoom 1x",
-    "Map zoom 1.5x", "Map zoom 2x"
+    "Map zoom 0.75x", "Map zoom 1x"
 };
 
 float scaling_factor(const Preferences &preferences)
@@ -262,7 +261,7 @@ std::vector<int> available_save_slots()
 
 void load_preferences(Preferences &preferences)
 {
-    preferences = {false, true, true, 2};
+    preferences = {false, true, true, 1};
     FILE *file = fopen(PREFERENCES_PATH, "r");
     if (file == NULL && errno == ENOENT) {
         file = fopen(LEGACY_PREFERENCES_PATH, "r");
@@ -271,7 +270,7 @@ void load_preferences(Preferences &preferences)
     int map_on_bottom = 0;
     int circle_pad_enabled = 1;
     int touch_movement_enabled = 1;
-    int scaling_factor_index = 2;
+    int saved_scaling_index = 2;
     if (fscanf(file, "%d %d %d", &map_on_bottom, &circle_pad_enabled,
             &touch_movement_enabled) == 3
             && (map_on_bottom == 0 || map_on_bottom == 1)
@@ -280,11 +279,20 @@ void load_preferences(Preferences &preferences)
         preferences.map_on_bottom = map_on_bottom != 0;
         preferences.circle_pad_enabled = circle_pad_enabled != 0;
         preferences.touch_movement_enabled = touch_movement_enabled != 0;
-        if (fscanf(file, "%d", &scaling_factor_index) == 1
-                && scaling_factor_index >= 0
-                && scaling_factor_index
-                    < static_cast<int>(sizeof(SCALE_FACTORS) / sizeof(SCALE_FACTORS[0]))) {
-            preferences.scaling_factor_index = scaling_factor_index;
+        if (fscanf(file, "%d", &saved_scaling_index) == 1) {
+            int preferences_version = 0;
+            const bool has_version = fscanf(file, "%d", &preferences_version) == 1;
+            if (has_version && preferences_version == 1) {
+                if (saved_scaling_index >= 0
+                        && saved_scaling_index
+                            < static_cast<int>(sizeof(SCALE_FACTORS)
+                                / sizeof(SCALE_FACTORS[0]))) {
+                    preferences.scaling_factor_index = saved_scaling_index;
+                }
+            } else if (saved_scaling_index >= 0 && saved_scaling_index <= 4) {
+                preferences.scaling_factor_index =
+                    saved_scaling_index <= 1 ? 0 : 1;
+            }
         }
     }
     fclose(file);
@@ -297,7 +305,7 @@ bool save_preferences(const Preferences &preferences)
     const std::string backup_path = std::string(PREFERENCES_PATH) + ".bak";
     FILE *file = fopen(temporary_path.c_str(), "w");
     if (file == NULL) return false;
-    const bool written = fprintf(file, "%d %d %d %d\n",
+    const bool written = fprintf(file, "%d %d %d %d 1\n",
         preferences.map_on_bottom ? 1 : 0,
         preferences.circle_pad_enabled ? 1 : 0,
         preferences.touch_movement_enabled ? 1 : 0,
@@ -391,8 +399,8 @@ int main(void)
         }
     }
     bool save_permitted = save_load_result != GAME_CORE_LOAD_ERROR;
-    const bool quicksave_exists = save_load_result == GAME_CORE_LOAD_OK;
-    const bool continue_available = quicksave_exists && core.health > 0;
+    bool quicksave_exists = save_load_result == GAME_CORE_LOAD_OK;
+    bool continue_available = quicksave_exists && core.health > 0;
     Preferences preferences;
     load_preferences(preferences);
 
@@ -459,7 +467,9 @@ int main(void)
     renderer_ready = renderer_ready && hud_ready;
     std::string save_error;
     const auto save_game = [&]() {
-        return save_resume_game(renderer, core, save_path, save_error);
+        const bool saved = save_resume_game(renderer, core, save_path, save_error);
+        if (saved) quicksave_exists = true;
+        return saved;
     };
 
     bool game_started = false;
@@ -519,6 +529,8 @@ int main(void)
         }
         save_permitted = true;
         game_started = true;
+        continue_available = true;
+        menu_returns_to_game = false;
         if (!save_game()) {
             menu_message = "New game started, but Continue could not be saved: "
                 + save_error;
@@ -542,6 +554,8 @@ int main(void)
         }
         save_permitted = true;
         game_started = true;
+        continue_available = true;
+        menu_returns_to_game = false;
         menu_message.clear();
         return true;
     };
@@ -581,6 +595,7 @@ int main(void)
     };
 
     u64 next_circle_move_time = 0;
+    unsigned int start_hold_frames = 0;
     bool map_on_bottom = preferences.map_on_bottom;
     bool exit_save_completed = false;
     ResumeSaveHook save_hook_context = {
@@ -602,8 +617,26 @@ int main(void)
 
     while (aptMainLoop()) {
         hidScanInput();
+        if (hidKeysHeld() & KEY_START) {
+            if (++start_hold_frames >= 30) break;
+        } else {
+            start_hold_frames = 0;
+        }
         const u32 keys_down = hidKeysDownRepeat();
-        if (keys_down & KEY_START) break;
+        if ((keys_down & KEY_START) && renderer_ready && game_started) {
+            menu_page = andortrail::platform3ds::START_MENU_MAIN;
+            menu_selection = 0;
+            menu_returns_to_game = true;
+            game_started = false;
+            continue_available = true;
+            if (!save_game()) {
+                menu_message = "Game could not be saved: " + save_error;
+            } else {
+                menu_message.clear();
+            }
+        } else if ((keys_down & KEY_START) && !renderer_ready) {
+            break;
+        }
         if (renderer_ready && !game_started) {
             std::vector<std::string> menu_entries;
             if (menu_page == andortrail::platform3ds::START_MENU_MAIN) {
@@ -738,9 +771,6 @@ int main(void)
                     menu_page = andortrail::platform3ds::START_MENU_SAVE;
                     menu_selection = 0;
                     menu_message = "Select slot";
-                } else if (menu_returns_to_game) {
-                    game_started = true;
-                    menu_returns_to_game = false;
                 } else {
                     menu_page = andortrail::platform3ds::START_MENU_MAIN;
                     menu_selection = 0;
@@ -752,6 +782,7 @@ int main(void)
                     if (continue_available) {
                         if (action == 0) {
                             game_started = true;
+                            menu_returns_to_game = false;
                             menu_message.clear();
                         } else --action;
                     }
