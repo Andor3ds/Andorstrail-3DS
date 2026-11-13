@@ -1406,7 +1406,7 @@ void MapRenderer::update_enemies(std::uint64_t current_time_ms)
                             * (1 + game_core_random(core_, 5));
                     continue;
                 }
-                begin_encounter_with_enemy(enemy);
+                begin_combat_from_monster(enemy);
                 return;
             }
             enemy.has_destination = false;
@@ -1437,7 +1437,7 @@ bool MapRenderer::check_monster_aggression()
         }
         if (game_core_random(core_, 100)
                 < static_cast<std::uint32_t>(aggression_chance)) {
-            begin_encounter_with_enemy(enemy);
+            begin_combat_from_monster(enemy);
             return true;
         }
     }
@@ -1464,6 +1464,21 @@ void MapRenderer::begin_encounter_with_enemy(EnemyState &enemy)
         + "\nDo you want to attack?\nDifficulty: " + encounter_difficulty_;
     shop_interaction_ = false;
     modal_interaction_ = true;
+}
+
+void MapRenderer::begin_combat_from_monster(EnemyState &enemy)
+{
+    encounter_pending_ = false;
+    encounter_info_open_ = false;
+    encounter_difficulty_.clear();
+    declined_enemy_instance_id_.clear();
+    selected_enemy_instance_id_ = enemy.instance_id;
+    combat_active_ = true;
+    monster_turn_active_ = false;
+    shop_interaction_ = false;
+    modal_interaction_ = false;
+    interaction_message_ = enemy.name + " attacks.";
+    resolve_monster_turn(interaction_message_, true);
 }
 
 bool MapRenderer::update_spawn_areas(std::uint64_t current_time_ms,

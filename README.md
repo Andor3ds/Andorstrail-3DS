@@ -82,11 +82,12 @@ action points, source monster stats, drops and experience, source-derived
 equipment/condition bonuses, hit effects, and skill bonuses.
 Combat adjacency includes diagonal tiles, and monsters use the original
 obstacle-aware pathfinding rules. Aggressive monsters can engage from adjacent
-tiles using the original evasion-based chance. Approaching an aggressive
-monster opens the original Encounter choices: Yes enters combat, Info shows
-monster details, and No declines. Use Left/Right and A to choose, or B to
-decline; touching the corresponding option also selects it. Enemy combat
-actions are paced to the original game's one-second turn delay.
+tiles using the original evasion-based chance; a successful aggression check
+or a monster stepping onto the player starts combat with the monster turn first.
+Pressing A near an aggressive monster opens the Encounter choices: Yes enters
+combat, Info shows monster details, and No declines. Use Left/Right and A to
+choose, or B to decline; touching the corresponding option also selects it.
+Enemy combat actions are paced to the original game's one-second turn delay.
 Mikhail is drawn with his original sprite at his Home spawn; move next to him
 or press A while adjacent (including diagonally) to talk. Travel south to Crossglen, then enter the
 Crossglen Hall to find Mara at her original spawn and buy bread. The two

@@ -151,6 +151,7 @@ private:
     void reset_world_round_timers();
     void resolve_monster_turn(std::string &message,
         bool first_turn_of_combat = false);
+    void begin_combat_from_monster(EnemyState &enemy);
     void advance_monster_turn(std::uint64_t current_time_ms);
     void finish_monster_turn(std::string &message);
     bool check_monster_aggression();
